@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DuseyGuzergah.Api/DuseyGuzergah.Api.csproj" />
+    <Project Path="src/DuseyGuzergah.Core/DuseyGuzergah.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DuseyGuzergah.Core.Tests/DuseyGuzergah.Core.Tests.csproj" />
+  </Folder>
+</Solution>

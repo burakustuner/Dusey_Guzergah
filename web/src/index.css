@@ -1,0 +1,282 @@
+:root {
+  color: #1f2328;
+  background: #eef2f6;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+}
+
+button, input {
+  font: inherit;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar, .layers, .status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.brand {
+  font-weight: 650;
+  margin-right: 8px;
+}
+
+.file {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #57606a;
+}
+
+.file input { max-width: 220px; }
+
+.sep {
+  width: 1px;
+  align-self: stretch;
+  background: #d8dee6;
+  margin: 0 4px;
+}
+
+button {
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.active, button.chip.on {
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.layers {
+  flex-wrap: wrap;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.chip { font-size: 12px; }
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #f7fafc;
+}
+
+.profile-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.tool-pan { cursor: grab; }
+.tool-select { cursor: default; }
+.tool-measure, .tool-window, .tool-pick { cursor: crosshair; }
+
+.readout {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #57606a;
+  pointer-events: none;
+}
+
+.side {
+  width: 280px;
+  overflow: auto;
+  background: #fff;
+  border-left: 1px solid #d8dee6;
+  padding: 12px 14px 24px;
+}
+
+.side h2 {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #57606a;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #57606a;
+}
+
+.field input {
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.side button {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.primary {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+
+.hint {
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.issues ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.issues li {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.issues li.error { color: #cf222e; }
+.issues li.warning { color: #9a6700; }
+
+.status {
+  border-top: 1px solid #d8dee6;
+  border-bottom: 0;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #57606a;
+}
+
+.error { color: #cf222e; }
+
+.editor-dock {
+  height: 230px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-top: 1px solid #d8dee6;
+  min-height: 0;
+}
+
+.editor-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e6edf3;
+}
+
+.editor-tools strong { margin-right: 6px; }
+
+.editor-scroll { overflow: auto; flex: 1; }
+
+.editor-table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 12px;
+}
+
+.editor-table th, .editor-table td {
+  border-bottom: 1px solid #edf2f9;
+  padding: 4px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.editor-table th {
+  position: sticky;
+  top: 0;
+  background: #f6f8fa;
+  color: #57606a;
+  font-weight: 600;
+}
+
+.editor-table tr.spacer td {
+  padding: 0;
+  border: 0;
+}
+
+.editor-table tr.selected { background: #dcf5f4; }
+
+.editor-table input {
+  width: 92px;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: right;
+  padding: 2px 4px;
+}
+
+.editor-table input:focus {
+  border-color: #54aeff;
+  background: #fff;
+}
+
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.12);
+  padding: 4px;
+}
+
+.context-menu button {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  width: 100%;
+}
+
+.context-menu button:hover:not(:disabled) { background: #ddf4ff; }
