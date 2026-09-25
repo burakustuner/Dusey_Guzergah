@@ -73,6 +73,7 @@ export type DesignParameters = {
   hotBendMaxAngleDeg: number
   hotBendTangentM: number
   straightEndM: number
+  mergeExtraBurial: number
   crossings: DesignCrossing[]
 }
 
@@ -92,6 +93,7 @@ export type DesignForm = {
   hotBendRadiusFactor: number
   hotBendMaxAngleDeg: number
   hotBendTangentM: number
+  mergeExtraBurial: number
 }
 
 export type Layers = {
@@ -139,6 +141,7 @@ export const defaultForm: DesignForm = {
   hotBendRadiusFactor: 5,
   hotBendMaxAngleDeg: 45,
   hotBendTangentM: 1,
+  mergeExtraBurial: 2,
 }
 
 export const defaultLayers: Layers = {
@@ -174,6 +177,7 @@ export function toDesignParameters(
     hotBendMaxAngleDeg: form.hotBendMaxAngleDeg,
     hotBendTangentM: form.hotBendTangentM,
     straightEndM: form.straightEndM,
+    mergeExtraBurial: form.mergeExtraBurial,
     crossings: crossings
       .filter((row) => row.depth > 0 && row.endKm !== row.startKm)
       .map((row) => ({

@@ -81,6 +81,38 @@ public sealed class DesignCalculationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public void Example_profile_stays_sparser_than_the_unpruned_run()
+    {
+        var ksePath = Path.Combine(AppContext.BaseDirectory, "fixtures", "ARAZI.KSE");
+        var terrain = KseReader.ReadCenterProfile(ksePath);
+        var parameters = DesktopDefaults() with
+        {
+            MinimumCover = 1.0,
+            MinimumRadius = 18.288,
+            MergeExtraBurial = 2
+        };
+        var result = VerticalDesignCalculator.Calculate(terrain, parameters);
+        Assert.InRange(result.Vertices.Count, 450, 800);
+    }
+
+    [Fact]
+    public void Prune_removes_vertices_that_only_follow_small_ripples()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0d; station <= 2000; station += 5)
+        {
+            terrain.Add(new ProfilePoint(station, 100 + 0.3 * Math.Sin(station / 8)));
+        }
+
+        var result = VerticalDesignCalculator.Calculate(terrain, DesktopDefaults());
+        Assert.InRange(result.Vertices.Count, 3, 120);
+        for (var i = 1; i < result.Vertices.Count; i++)
+        {
+            Assert.True(result.Vertices[i].Station - result.Vertices[i - 1].Station > 0.05);
+        }
+    }
+
+    [Fact]
     public void Crossing_keeps_nominal_at_required_depth()
     {
         var terrain = new List<ProfilePoint>();

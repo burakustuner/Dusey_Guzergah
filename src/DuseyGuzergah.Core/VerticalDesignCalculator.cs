@@ -72,6 +72,12 @@ public static class VerticalDesignCalculator
             parameters,
             burialSlackBeyondTarget: 0.10);
 
+        simplifiedPoints = PruneDenseVertices(
+            simplifiedPoints,
+            result.CoverEnvelope,
+            parameters,
+            maximumCover);
+
         result.Vertices.AddRange(BuildVertices(simplifiedPoints, parameters));
         result.Curve.AddRange(KtbReader.BuildVerticalCurve(result.Vertices));
         result.Guides.AddRange(KtbReader.BuildVerticalCurveGuides(result.Vertices));
@@ -1013,6 +1019,285 @@ public static class VerticalDesignCalculator
         }
 
         return true;
+    }
+
+    private static List<ProfilePoint> PruneDenseVertices(
+        List<ProfilePoint> points,
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        DesignParameters parameters,
+        double maximumCover)
+    {
+        var result = DedupStations(points);
+        if (result.Count < 3 || envelope.Count < 2)
+        {
+            return result;
+        }
+
+        var allowedExtra = AllowedMergeExtra(parameters, maximumCover);
+        var minLeg = Math.Max(0.5, parameters.MinimumSegmentLength);
+
+        for (var pass = 0; pass < 24 && result.Count > 2; pass++)
+        {
+            var candidates = new List<(int Index, double Score)>();
+            for (var i = 1; i < result.Count - 1; i++)
+            {
+                var prev = result[i - 1];
+                var curr = result[i];
+                var next = result[i + 1];
+                var span = next.Station - prev.Station;
+                if (span <= 0.05 || curr.Station - prev.Station <= 0.05)
+                {
+                    candidates.Add((i, -1_000_000));
+                    continue;
+                }
+
+                if (!ChordFits(prev, next, envelope, allowedExtra))
+                {
+                    continue;
+                }
+
+                var slopeIn = (curr.Elevation - prev.Elevation) / Math.Max(curr.Station - prev.Station, 1e-6);
+                var slopeOut = (next.Elevation - curr.Elevation) / Math.Max(next.Station - curr.Station, 1e-6);
+                var shortBias = span < minLeg ? 0 : 1_000;
+                candidates.Add((i, shortBias + Math.Abs(slopeOut - slopeIn)));
+            }
+
+            if (candidates.Count == 0)
+            {
+                break;
+            }
+
+            candidates.Sort((a, b) => a.Score.CompareTo(b.Score));
+            var remove = new bool[result.Count];
+            var blocked = new bool[result.Count];
+            var any = false;
+            foreach (var candidate in candidates)
+            {
+                var index = candidate.Index;
+                if (blocked[index] || blocked[index - 1] || blocked[index + 1])
+                {
+                    continue;
+                }
+
+                remove[index] = true;
+                blocked[index] = true;
+                blocked[index - 1] = true;
+                blocked[index + 1] = true;
+                any = true;
+            }
+
+            if (!any)
+            {
+                break;
+            }
+
+            var kept = new List<ProfilePoint>(result.Count);
+            for (var i = 0; i < result.Count; i++)
+            {
+                if (!remove[i])
+                {
+                    kept.Add(result[i]);
+                }
+            }
+
+            result = kept;
+        }
+
+        return ShiftVerticesAlongCorridor(result, envelope, allowedExtra);
+    }
+
+    private static List<ProfilePoint> DedupStations(List<ProfilePoint> points)
+    {
+        if (points.Count == 0)
+        {
+            return points;
+        }
+
+        var ordered = points.OrderBy(point => point.Station).ToList();
+        var result = new List<ProfilePoint> { ordered[0] };
+        for (var i = 1; i < ordered.Count; i++)
+        {
+            var previous = result[^1];
+            var current = ordered[i];
+            if (current.Station - previous.Station <= 0.05)
+            {
+                if (current.Elevation < previous.Elevation)
+                {
+                    result[^1] = current;
+                }
+
+                continue;
+            }
+
+            result.Add(current);
+        }
+
+        return result;
+    }
+
+    private static double AllowedMergeExtra(DesignParameters parameters, double maximumCover)
+    {
+        var requested = parameters.MergeExtraBurial;
+        var room = Math.Max(parameters.CoverTolerance, maximumCover - parameters.TargetCover);
+        return Math.Min(Math.Max(0, requested), room);
+    }
+
+    private static bool ChordFits(
+        ProfilePoint start,
+        ProfilePoint end,
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        double allowedExtra)
+    {
+        var range = end.Station - start.Station;
+        if (range <= 0.05)
+        {
+            return false;
+        }
+
+        var first = LowerBoundStation(envelope, start.Station);
+        var last = LowerBoundStation(envelope, end.Station);
+        var maxExtra = 0d;
+        for (var i = first; i < last; i++)
+        {
+            var ep = envelope[i];
+            if (ep.Station <= start.Station || ep.Station >= end.Station)
+            {
+                continue;
+            }
+
+            var t = (ep.Station - start.Station) / range;
+            var elevation = start.Elevation + t * (end.Elevation - start.Elevation);
+            var maxAllowed = ep.MinimumCoverUpperElevation - LiftClearance + MinCoverViolationTolerance;
+            if (elevation > maxAllowed || elevation < ep.PreferredLowerElevation - MinCoverViolationTolerance)
+            {
+                return false;
+            }
+
+            var extra = ep.NominalPipeTopElevation - elevation;
+            if (extra > maxExtra)
+            {
+                maxExtra = extra;
+            }
+        }
+
+        return maxExtra <= allowedExtra + 1e-6;
+    }
+
+    private static List<ProfilePoint> ShiftVerticesAlongCorridor(
+        List<ProfilePoint> points,
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        double allowedExtra)
+    {
+        if (points.Count < 3)
+        {
+            return points;
+        }
+
+        var result = points.ToList();
+        for (var i = 1; i < result.Count - 1; i++)
+        {
+            var prev = result[i - 1];
+            var curr = result[i];
+            var next = result[i + 1];
+            var spanIn = curr.Station - prev.Station;
+            var spanOut = next.Station - curr.Station;
+            if (spanIn <= 0.5 || spanOut <= 0.5)
+            {
+                continue;
+            }
+
+            var best = curr;
+            var bestScore = Math.Abs(
+                ((curr.Elevation - prev.Elevation) / spanIn) -
+                ((next.Elevation - curr.Elevation) / spanOut));
+            var low = prev.Station + 0.5;
+            var high = next.Station - 0.5;
+            if (high - low < 1)
+            {
+                continue;
+            }
+
+            for (var step = 1; step <= 6; step++)
+            {
+                var station = low + (high - low) * step / 7.0;
+                var envelopePoint = EnvelopeAt(envelope, station);
+                var straight = prev.Elevation + (next.Elevation - prev.Elevation) * ((station - prev.Station) / (next.Station - prev.Station));
+                var samples = new[] { curr.Elevation, envelopePoint.NominalPipeTopElevation, straight };
+                foreach (var elevation in samples)
+                {
+                    var trial = new ProfilePoint(station, elevation);
+                    if (!ChordFits(prev, trial, envelope, allowedExtra) || !ChordFits(trial, next, envelope, allowedExtra))
+                    {
+                        continue;
+                    }
+
+                    var score = Math.Abs(
+                        ((trial.Elevation - prev.Elevation) / (trial.Station - prev.Station)) -
+                        ((next.Elevation - trial.Elevation) / (next.Station - trial.Station)));
+                    if (score + 1e-4 < bestScore)
+                    {
+                        best = trial;
+                        bestScore = score;
+                    }
+                }
+            }
+
+            result[i] = best;
+        }
+
+        return DedupStations(result);
+    }
+
+    private static CoverEnvelopePoint EnvelopeAt(IReadOnlyList<CoverEnvelopePoint> envelope, double station)
+    {
+        var index = LowerBoundStation(envelope, station);
+        if (index <= 0)
+        {
+            return envelope[0];
+        }
+
+        if (index >= envelope.Count)
+        {
+            return envelope[^1];
+        }
+
+        var right = envelope[index];
+        var left = envelope[index - 1];
+        var range = right.Station - left.Station;
+        if (range <= 1e-9)
+        {
+            return right;
+        }
+
+        var t = (station - left.Station) / range;
+        return new CoverEnvelopePoint(
+            station,
+            left.TerrainElevation + (right.TerrainElevation - left.TerrainElevation) * t,
+            left.StrippedElevation + (right.StrippedElevation - left.StrippedElevation) * t,
+            left.NominalPipeTopElevation + (right.NominalPipeTopElevation - left.NominalPipeTopElevation) * t,
+            left.PreferredLowerElevation + (right.PreferredLowerElevation - left.PreferredLowerElevation) * t,
+            left.PreferredUpperElevation + (right.PreferredUpperElevation - left.PreferredUpperElevation) * t,
+            left.MinimumCoverUpperElevation + (right.MinimumCoverUpperElevation - left.MinimumCoverUpperElevation) * t);
+    }
+
+    private static int LowerBoundStation(IReadOnlyList<CoverEnvelopePoint> envelope, double station)
+    {
+        var low = 0;
+        var high = envelope.Count;
+        while (low < high)
+        {
+            var mid = (low + high) / 2;
+            if (envelope[mid].Station < station)
+            {
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+
+        return low;
     }
 
     private static IEnumerable<VerticalAlignmentVertex> BuildVertices(

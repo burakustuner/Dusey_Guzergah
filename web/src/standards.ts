@@ -44,6 +44,7 @@ export const botasStandard = {
   hotBendRadiusFactor: 5,
   hotBendMaxAngleDeg: 45,
   hotBendTangentM: 1,
+  mergeExtraBurial: 2,
 }
 
 export function applyBotas(inches: number) {
@@ -64,6 +65,7 @@ export function applyBotas(inches: number) {
     hotBendRadiusFactor: botasStandard.hotBendRadiusFactor,
     hotBendMaxAngleDeg: botasStandard.hotBendMaxAngleDeg,
     hotBendTangentM: botasStandard.hotBendTangentM,
+    mergeExtraBurial: botasStandard.mergeExtraBurial,
   }
 }
 

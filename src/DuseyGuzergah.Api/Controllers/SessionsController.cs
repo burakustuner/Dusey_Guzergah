@@ -256,7 +256,8 @@ public sealed class SessionsController : ControllerBase
             parameters.PipeDiameter < 0 ||
             parameters.PipeLength < 0 ||
             parameters.MinimumSegmentLength < 0 ||
-            parameters.MinimumRadius < 0)
+            parameters.MinimumRadius < 0 ||
+            parameters.MergeExtraBurial < 0)
         {
             return "Hesap parametreleri negatif olamaz.";
         }

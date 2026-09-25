@@ -487,6 +487,7 @@ export default function App() {
           <NumberField label="Hedef örtü (m)" value={form.targetCover} step="0.01" onChange={(value) => setForm((current) => ({ ...current, targetCover: value }))} />
           <NumberField label="Minimum örtü (m)" value={form.minimumCover} step="0.01" onChange={(value) => setForm((current) => ({ ...current, minimumCover: value }))} />
           <NumberField label="Ek derinlik (m)" value={form.extraDepth} step="0.01" onChange={(value) => setForm((current) => ({ ...current, extraDepth: value }))} />
+          <NumberField label="Birleştirmede ek gömü (m)" value={form.mergeExtraBurial} step="0.01" onChange={(value) => setForm((current) => ({ ...current, mergeExtraBurial: value }))} />
           <NumberField label="Sıyırma (m)" value={form.strippingDepth} step="0.01" onChange={(value) => setForm((current) => ({ ...current, strippingDepth: value }))} />
           <NumberField label="Boru boyu (m)" value={form.pipeLength} step="0.01" onChange={(value) => setForm((current) => ({ ...current, pipeLength: value }))} />
           <NumberField label="Düz uç (m)" value={form.straightEndM} step="0.1" onChange={(value) => setForm((current) => ({ ...current, straightEndM: value }))} />

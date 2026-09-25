@@ -52,6 +52,7 @@ public sealed record DesignParameters(
     double HotBendMaxAngleDeg = 45,
     double HotBendTangentM = 1,
     double StraightEndM = 1.8,
+    double MergeExtraBurial = 2,
     IReadOnlyList<SpecialCrossing>? Crossings = null);
 
 public sealed class DesignProfileResult
