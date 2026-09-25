@@ -49,6 +49,14 @@ export type DesignResult = {
   coverIssues: CoverIssue[]
 }
 
+export type DesignCrossing = {
+  name: string
+  type: string
+  startStation: number
+  endStation: number
+  depth: number
+}
+
 export type DesignParameters = {
   targetCover: number
   coverTolerance: number
@@ -59,16 +67,31 @@ export type DesignParameters = {
   pipeLength: number
   minimumSegmentLength: number
   minimumRadius: number
+  coldBendMinRadius: number
+  elasticRadiusFactor: number
+  hotBendRadiusFactor: number
+  hotBendMaxAngleDeg: number
+  hotBendTangentM: number
+  straightEndM: number
+  crossings: DesignCrossing[]
 }
 
 export type DesignForm = {
+  standard: string
+  diameterInches: number
   targetCover: number
+  minimumCover: number
   extraDepth: number
   strippingDepth: number
-  pipeDiameter: number
   pipeLength: number
+  straightEndM: number
   minimumSegmentLength: number
   minimumRadius: number
+  coldBendMinRadius: number
+  elasticRadiusFactor: number
+  hotBendRadiusFactor: number
+  hotBendMaxAngleDeg: number
+  hotBendTangentM: number
 }
 
 export type Layers = {
@@ -101,13 +124,21 @@ export const defaultThresholds: WarningThresholds = {
 }
 
 export const defaultForm: DesignForm = {
+  standard: 'botas',
+  diameterInches: 12,
   targetCover: 1.2,
+  minimumCover: 1.0,
   extraDepth: 3,
   strippingDepth: 0.15,
-  pipeDiameter: 12,
   pipeLength: 12,
+  straightEndM: 1.8,
   minimumSegmentLength: 24,
-  minimumRadius: 60,
+  minimumRadius: 18.288,
+  coldBendMinRadius: 18.288,
+  elasticRadiusFactor: 500,
+  hotBendRadiusFactor: 5,
+  hotBendMaxAngleDeg: 45,
+  hotBendTangentM: 1,
 }
 
 export const defaultLayers: Layers = {
@@ -123,16 +154,34 @@ export const defaultLayers: Layers = {
   issues: true,
 }
 
-export function toDesignParameters(form: DesignForm): DesignParameters {
+export function toDesignParameters(
+  form: DesignForm,
+  crossings: { name: string; type: string; startKm: number; endKm: number; depth: number }[] = [],
+): DesignParameters {
   return {
     targetCover: form.targetCover,
     coverTolerance: 0.05,
-    minimumCover: form.targetCover,
+    minimumCover: form.minimumCover,
     maximumCover: form.targetCover + form.extraDepth,
     strippingDepth: form.strippingDepth,
-    pipeDiameter: form.pipeDiameter,
+    pipeDiameter: form.diameterInches * 0.0254,
     pipeLength: form.pipeLength,
     minimumSegmentLength: form.minimumSegmentLength,
     minimumRadius: form.minimumRadius,
+    coldBendMinRadius: form.coldBendMinRadius,
+    elasticRadiusFactor: form.elasticRadiusFactor,
+    hotBendRadiusFactor: form.hotBendRadiusFactor,
+    hotBendMaxAngleDeg: form.hotBendMaxAngleDeg,
+    hotBendTangentM: form.hotBendTangentM,
+    straightEndM: form.straightEndM,
+    crossings: crossings
+      .filter((row) => row.depth > 0 && row.endKm !== row.startKm)
+      .map((row) => ({
+        name: row.name,
+        type: row.type,
+        startStation: Math.min(row.startKm, row.endKm) * 1000,
+        endStation: Math.max(row.startKm, row.endKm) * 1000,
+        depth: row.depth,
+      })),
   }
 }

@@ -57,11 +57,17 @@ public static class DesignWarningsEvaluator
                 msgs.Add($"KM {v.Station:0.###}: Kurp uzunlığı çok kısa (L≈{v.CurveLength:0.##} m < {thresholds.MinInteriorCurveLengthM}).");
             }
 
-            if (thresholds.WarnRadiusBelowDesignMinimum &&
-                v.Radius > 1e-3 &&
-                v.Radius + 1e-6 < designParameters.MinimumRadius)
+            if (thresholds.WarnRadiusBelowDesignMinimum && v.Radius > 1e-3)
             {
-                msgs.Add($"KM {v.Station:0.###}: Yaricap R≈{v.Radius:0.#} m, hesaptaki Minimum R ({designParameters.MinimumRadius}) altında.");
+                var cold = designParameters.ColdBendMinRadius;
+                if (cold > 1e-3 && v.Radius + 1e-6 < cold)
+                {
+                    msgs.Add($"KM {v.Station:0.###}: Yarıçap R≈{v.Radius:0.#} m, soğuk büküm sınırının altında ({cold:0.#} m); sıcak büküm adayı.");
+                }
+                else if (v.Radius + 1e-6 < designParameters.MinimumRadius)
+                {
+                    msgs.Add($"KM {v.Station:0.###}: Yaricap R≈{v.Radius:0.#} m, hesaptaki Minimum R ({designParameters.MinimumRadius}) altında.");
+                }
             }
         }
 

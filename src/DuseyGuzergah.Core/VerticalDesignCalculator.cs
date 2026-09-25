@@ -36,7 +36,7 @@ public static class VerticalDesignCalculator
 
         var chordBurialSlack = ComputeChordBurialSlack(parameters.TargetCover, maximumCover);
 
-        var minAcceptableBurialDepth = Math.Max(0.05, parameters.TargetCover - ShallowBurialMargin);
+        var minAcceptableBurialDepth = BaseMinBurial(parameters);
 
         var simplifiedPoints = SelectPrimaryIntersections(
             result.CoverEnvelope,
@@ -80,6 +80,7 @@ public static class VerticalDesignCalculator
         var initialIssues = CheckBurialDepth(
                 result.Curve,
                 result.CoverEnvelope,
+                parameters,
                 minAcceptableBurialDepth,
                 nominalBridgeLiftProfile)
             .ToList();
@@ -113,6 +114,7 @@ public static class VerticalDesignCalculator
             CheckBurialDepth(
                 result.Curve,
                 result.CoverEnvelope,
+                parameters,
                 minAcceptableBurialDepth,
                 nominalBridgeLiftProfile));
 
@@ -129,7 +131,7 @@ public static class VerticalDesignCalculator
         DesignParameters parameters,
         DesignProfileResult result)
     {
-        var minBurialDepth = Math.Max(0.05, parameters.TargetCover - ShallowBurialMargin);
+        var minBurialDepth = BaseMinBurial(parameters);
         var maxBurialDepth = Math.Max(parameters.MaximumCover, parameters.TargetCover);
 
         var n = orderedTerrain.Count;
@@ -154,9 +156,16 @@ public static class VerticalDesignCalculator
         {
             var terrainElevation = orderedTerrain[i].Elevation;
             var strippedRaw = strippedVals[i];
-            var shallowPipeTopCeiling = strippedRaw - minBurialDepth;
-            var deepPipeTopFloor = strippedRaw - maxBurialDepth;
+            var crossingCover = CrossingCoverAt(stations[i], parameters);
+            var stationMinBurial = Math.Max(minBurialDepth, crossingCover);
+            var stationMaxBurial = Math.Max(maxBurialDepth, crossingCover);
+            var shallowPipeTopCeiling = strippedRaw - stationMinBurial;
+            var deepPipeTopFloor = strippedRaw - stationMaxBurial;
             var zNom = Math.Clamp(bridgedNominals[i], deepPipeTopFloor, shallowPipeTopCeiling);
+            if (crossingCover > 0)
+            {
+                zNom = Math.Min(zNom, strippedRaw - crossingCover);
+            }
             var bridgeLift = Math.Max(0, bridgedNominals[i] - rawNominals[i]);
 
             result.CoverEnvelope.Add(new CoverEnvelopePoint(
@@ -1057,9 +1066,42 @@ public static class VerticalDesignCalculator
         }
     }
 
+    private static double BaseMinBurial(DesignParameters parameters)
+    {
+        if (parameters.MinimumCover + 1e-6 >= parameters.TargetCover)
+        {
+            return Math.Max(0.05, parameters.TargetCover - ShallowBurialMargin);
+        }
+
+        return Math.Max(0.05, parameters.MinimumCover);
+    }
+
+    private static double CrossingCoverAt(double station, DesignParameters parameters)
+    {
+        var crossings = parameters.Crossings;
+        if (crossings is null || crossings.Count == 0)
+        {
+            return 0;
+        }
+
+        var cover = 0d;
+        foreach (var crossing in crossings)
+        {
+            var start = Math.Min(crossing.StartStation, crossing.EndStation);
+            var end = Math.Max(crossing.StartStation, crossing.EndStation);
+            if (station + 1e-6 >= start && station - 1e-6 <= end)
+            {
+                cover = Math.Max(cover, crossing.Depth);
+            }
+        }
+
+        return cover;
+    }
+
     private static IEnumerable<CoverIssue> CheckBurialDepth(
         IReadOnlyList<ProfilePoint> designCurve,
         IReadOnlyList<CoverEnvelopePoint> envelope,
+        DesignParameters parameters,
         double minimumBurialDepth,
         IReadOnlyList<ProfilePoint>? nominalBridgeLiftProfile = null)
     {
@@ -1068,6 +1110,7 @@ public static class VerticalDesignCalculator
             var surface = InterpolateStrippedElevation(envelope, point.Station);
             var burial = surface - point.Elevation;
             var need = EffectiveMinBurialForStation(point.Station, minimumBurialDepth, nominalBridgeLiftProfile);
+            need = Math.Max(need, CrossingCoverAt(point.Station, parameters));
             if (burial < need)
             {
                 yield return new CoverIssue(point.Station, burial, "Ust tampon dahilinde minimum derinlik saglanmiyor");

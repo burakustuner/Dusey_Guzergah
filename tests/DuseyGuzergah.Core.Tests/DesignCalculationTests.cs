@@ -80,6 +80,27 @@ public sealed class DesignCalculationTests : IClassFixture<ApiFactory>
         }
     }
 
+    [Fact]
+    public void Crossing_keeps_nominal_at_required_depth()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0; station <= 200; station += 10)
+        {
+            terrain.Add(new ProfilePoint(station, 100));
+        }
+
+        var parameters = DesktopDefaults() with
+        {
+            MinimumCover = 1.0,
+            Crossings = [new SpecialCrossing("dere", "akarsu", 80, 120, 2.5)]
+        };
+
+        var result = VerticalDesignCalculator.Calculate(terrain, parameters);
+        var inside = result.TargetProfile.Where(point => point.Station >= 80 && point.Station <= 120).ToList();
+        Assert.NotEmpty(inside);
+        Assert.All(inside, point => Assert.InRange(99.85 - point.Elevation, 2.45, 2.55));
+    }
+
     private static DesignParameters DesktopDefaults() => new(
         TargetCover: 1.20,
         CoverTolerance: 0.05,

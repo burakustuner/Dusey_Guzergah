@@ -10,6 +10,8 @@ import {
 } from './editor'
 import EditorPanel from './EditorPanel'
 import ProfileCanvas, { type ProfileCanvasHandle } from './ProfileCanvas'
+import { downloadCrossingTemplate, emptyCrossing, readCrossingFile, type Crossing } from './crossings'
+import { applyBotas, bendFieldsForDiameter, diameterChoices, diameterMeters, elasticRadiusM, hotBendRadiusM } from './standards'
 import { buildVerticalCurve, buildVerticalCurveGuides } from './verticalCurve'
 import {
   defaultForm,
@@ -40,16 +42,6 @@ const layerItems: { key: keyof Layers; label: string }[] = [
   { key: 'issues', label: 'Kaplama uyarısı' },
 ]
 
-const fields: { key: keyof DesignForm; label: string; step: string }[] = [
-  { key: 'targetCover', label: 'Hedef derinlik (m)', step: '0.01' },
-  { key: 'extraDepth', label: 'Ek derinlik (m)', step: '0.01' },
-  { key: 'strippingDepth', label: 'Sıyırma (m)', step: '0.01' },
-  { key: 'pipeDiameter', label: 'Boru çapı (m)', step: '0.01' },
-  { key: 'pipeLength', label: 'Boru boyu (m)', step: '0.01' },
-  { key: 'minimumSegmentLength', label: 'Min. ara (m)', step: '0.1' },
-  { key: 'minimumRadius', label: 'Min. R (m)', step: '1' },
-]
-
 type AppliedAlignment = { vertices: Vertex[]; curve: Point[]; guides: Guide[] }
 type MenuState = { x: number; y: number; station: number; elevation: number }
 
@@ -64,6 +56,7 @@ export default function App() {
   const [session, setSession] = useState<SessionResponse | null>(null)
   const [design, setDesign] = useState<DesignResult | null>(null)
   const [form, setForm] = useState<DesignForm>(defaultForm)
+  const [crossings, setCrossings] = useState<Crossing[]>([])
   const [layers, setLayers] = useState<Layers>(defaultLayers)
   const [tool, setTool] = useState<CanvasTool>('select')
   const [busy, setBusy] = useState<'load' | 'calc' | 'export' | null>(null)
@@ -115,12 +108,12 @@ export default function App() {
     }
     const vertices = rows.length > 0 ? rows : (applied?.vertices ?? session.ktbVertices)
     const handle = window.setTimeout(() => {
-      fetchWarnings(session.sessionId, thresholds, toDesignParameters(form), vertices)
+      fetchWarnings(session.sessionId, thresholds, toDesignParameters(form, crossings), vertices)
         .then(setWarnings)
         .catch(() => setWarnings([]))
     }, 300)
     return () => window.clearTimeout(handle)
-  }, [session, rows, applied, thresholds, form])
+  }, [session, rows, applied, thresholds, form, crossings])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -211,7 +204,7 @@ export default function App() {
     setBusy('calc')
     setError('')
     try {
-      const result = await calculateDesign(session.sessionId, toDesignParameters(form))
+      const result = await calculateDesign(session.sessionId, toDesignParameters(form, crossings))
       setDesign(result)
       setLayers((current) => ({
         ...current,
@@ -386,6 +379,10 @@ export default function App() {
     }
   }
 
+  function patchCrossing(id: string, patch: Partial<Crossing>) {
+    setCrossings((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+  }
+
   function toggleTool(next: CanvasTool) {
     setTool((current) => (current === next ? 'select' : next))
     setMenu(null)
@@ -460,22 +457,93 @@ export default function App() {
         />
         <aside className="side">
           <h2>Hesap</h2>
-          {fields.map((field) => (
-            <label key={field.key} className="field">
-              {field.label}
+          <label className="field">
+            Standart
+            <select
+              value={form.standard}
+              onChange={(event) => {
+                if (event.target.value === 'botas') {
+                  setForm(applyBotas(form.diameterInches))
+                }
+              }}
+            >
+              <option value="botas">BOTAŞ</option>
+            </select>
+          </label>
+          <label className="field">
+            Boru çapı
+            <select
+              value={form.diameterInches}
+              onChange={(event) => {
+                const inches = Number(event.target.value)
+                setForm((current) => ({ ...current, ...bendFieldsForDiameter(inches) }))
+              }}
+            >
+              {diameterChoices.map((inches) => (
+                <option key={inches} value={inches}>{inches}&quot;</option>
+              ))}
+            </select>
+          </label>
+          <NumberField label="Hedef örtü (m)" value={form.targetCover} step="0.01" onChange={(value) => setForm((current) => ({ ...current, targetCover: value }))} />
+          <NumberField label="Minimum örtü (m)" value={form.minimumCover} step="0.01" onChange={(value) => setForm((current) => ({ ...current, minimumCover: value }))} />
+          <NumberField label="Ek derinlik (m)" value={form.extraDepth} step="0.01" onChange={(value) => setForm((current) => ({ ...current, extraDepth: value }))} />
+          <NumberField label="Sıyırma (m)" value={form.strippingDepth} step="0.01" onChange={(value) => setForm((current) => ({ ...current, strippingDepth: value }))} />
+          <NumberField label="Boru boyu (m)" value={form.pipeLength} step="0.01" onChange={(value) => setForm((current) => ({ ...current, pipeLength: value }))} />
+          <NumberField label="Düz uç (m)" value={form.straightEndM} step="0.1" onChange={(value) => setForm((current) => ({ ...current, straightEndM: value }))} />
+          <NumberField label="Min. ara (m)" value={form.minimumSegmentLength} step="0.1" onChange={(value) => setForm((current) => ({ ...current, minimumSegmentLength: value }))} />
+          <NumberField label="Soğuk büküm min. R (m)" value={form.minimumRadius} step="0.1" onChange={(value) => setForm((current) => ({ ...current, minimumRadius: value }))} />
+          <NumberField label="Elastik eşik (×D)" value={form.elasticRadiusFactor} step="1" onChange={(value) => setForm((current) => ({ ...current, elasticRadiusFactor: value }))} />
+          <NumberField label="Sıcak büküm R (×D)" value={form.hotBendRadiusFactor} step="0.1" onChange={(value) => setForm((current) => ({ ...current, hotBendRadiusFactor: value }))} />
+          <NumberField label="Sıcak büküm açı (°)" value={form.hotBendMaxAngleDeg} step="1" onChange={(value) => setForm((current) => ({ ...current, hotBendMaxAngleDeg: value }))} />
+          <NumberField label="Sıcak büküm teğet (m)" value={form.hotBendTangentM} step="0.1" onChange={(value) => setForm((current) => ({ ...current, hotBendTangentM: value }))} />
+          <p className="hint">
+            Çap {diameterMeters(form.diameterInches).toFixed(3)} m.
+            Elastik eşik {elasticRadiusM(form.diameterInches, form.elasticRadiusFactor).toFixed(1)} m,
+            soğuk büküm tablosu {form.coldBendMinRadius.toFixed(1)} m,
+            sıcak büküm {hotBendRadiusM(form.diameterInches, form.hotBendRadiusFactor).toFixed(2)} m.
+            Hedef örtü {form.targetCover.toFixed(2)} m, boru yüzeye {form.minimumCover.toFixed(2)} m’den yaklaşmaz.
+          </p>
+          <button type="button" onClick={() => setForm(applyBotas(form.diameterInches))}>
+            Standart değerleri doldur
+          </button>
+          <h2>Özel geçiş</h2>
+          <p className="hint">Liste boşsa arazi örtüsü değişmez. Kilometre ondalıktır (1.250 = 1+250). Şablondaki satırlar örnektir.</p>
+          <div className="crossing-actions">
+            <button type="button" onClick={downloadCrossingTemplate}>Şablonu indir</button>
+            <label className="file">
+              Liste yükle
               <input
-                type="number"
-                step={field.step}
-                min="0"
-                value={form[field.key]}
-                onChange={(event) => {
-                  const value = Number(event.target.value)
-                  setForm((current) => ({ ...current, [field.key]: Number.isFinite(value) ? value : 0 }))
+                type="file"
+                accept=".csv,.txt"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) {
+                    return
+                  }
+                  try {
+                    const rows = await readCrossingFile(file)
+                    setCrossings(rows)
+                    setStatus(rows.length === 0 ? 'Özel geçiş listesi boş.' : `${rows.length} özel geçiş okundu.`)
+                    setError('')
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Özel geçiş listesi okunamadı.')
+                  }
                 }}
               />
             </label>
+          </div>
+          {crossings.map((row) => (
+            <div key={row.id} className="crossing">
+              <input value={row.name} placeholder="Ad" onChange={(event) => patchCrossing(row.id, { name: event.target.value })} />
+              <input value={row.type} placeholder="Tip" onChange={(event) => patchCrossing(row.id, { type: event.target.value })} />
+              <input type="number" step="0.001" value={row.startKm} title="Başlangıç km" onChange={(event) => patchCrossing(row.id, { startKm: Number(event.target.value) })} />
+              <input type="number" step="0.001" value={row.endKm} title="Bitiş km" onChange={(event) => patchCrossing(row.id, { endKm: Number(event.target.value) })} />
+              <input type="number" step="0.01" value={row.depth} title="Derinlik m" onChange={(event) => patchCrossing(row.id, { depth: Number(event.target.value) })} />
+              <button type="button" onClick={() => setCrossings((current) => current.filter((item) => item.id !== row.id))}>Sil</button>
+            </div>
           ))}
-          <p className="hint">Örtü derinliği: {(form.strippingDepth + form.targetCover).toFixed(2)} m. Tolerans 0,05 m, minimum örtü hedef derinliğe eşit.</p>
+          <button type="button" onClick={() => setCrossings((current) => [...current, emptyCrossing()])}>Geçiş ekle</button>
           <button type="button" className="primary" onClick={runCalculate} disabled={busy !== null || !session}>
             {busy === 'calc' ? 'Hesaplanıyor…' : 'Hesapla'}
           </button>
@@ -558,5 +626,33 @@ export default function App() {
         {error && <span className="error">{error}</span>}
       </footer>
     </div>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  step,
+  onChange,
+}: {
+  label: string
+  value: number
+  step: string
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="field">
+      {label}
+      <input
+        type="number"
+        min="0"
+        step={step}
+        value={value}
+        onChange={(event) => {
+          const next = Number(event.target.value)
+          onChange(Number.isFinite(next) ? next : 0)
+        }}
+      />
+    </label>
   )
 }

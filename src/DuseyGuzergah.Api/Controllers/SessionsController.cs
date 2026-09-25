@@ -266,6 +266,22 @@ public sealed class SessionsController : ControllerBase
             return "Maksimum örtü, hedef örtüden küçük olamaz.";
         }
 
+        if (parameters.MinimumCover > parameters.TargetCover + 1e-9)
+        {
+            return "Minimum örtü, hedef örtüden büyük olamaz.";
+        }
+
+        if (parameters.Crossings is not null)
+        {
+            foreach (var crossing in parameters.Crossings)
+            {
+                if (crossing.Depth < 0 || crossing.StartStation < 0 || crossing.EndStation < 0)
+                {
+                    return "Özel geçiş kilometresi ve derinliği negatif olamaz.";
+                }
+            }
+        }
+
         return null;
     }
 

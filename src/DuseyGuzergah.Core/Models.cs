@@ -29,6 +29,13 @@ public sealed record CoverEnvelopePoint(
     double PreferredUpperElevation,
     double MinimumCoverUpperElevation);
 
+public sealed record SpecialCrossing(
+    string Name,
+    string Type,
+    double StartStation,
+    double EndStation,
+    double Depth);
+
 public sealed record DesignParameters(
     double TargetCover,
     double CoverTolerance,
@@ -38,7 +45,14 @@ public sealed record DesignParameters(
     double PipeDiameter,
     double PipeLength,
     double MinimumSegmentLength,
-    double MinimumRadius);
+    double MinimumRadius,
+    double ColdBendMinRadius = 0,
+    double ElasticRadiusFactor = 0,
+    double HotBendRadiusFactor = 5,
+    double HotBendMaxAngleDeg = 45,
+    double HotBendTangentM = 1,
+    double StraightEndM = 1.8,
+    IReadOnlyList<SpecialCrossing>? Crossings = null);
 
 public sealed class DesignProfileResult
 {
