@@ -81,7 +81,6 @@ public static class VerticalDesignCalculator
         result.Vertices.AddRange(BuildVertices(simplifiedPoints, parameters));
         result.Curve.AddRange(KtbReader.BuildVerticalCurve(result.Vertices));
         result.Guides.AddRange(KtbReader.BuildVerticalCurveGuides(result.Vertices));
-        ClampDesignCurveToNominalBaseline(result);
 
         var initialIssues = CheckBurialDepth(
                 result.Curve,
@@ -112,7 +111,6 @@ public static class VerticalDesignCalculator
                 result.Vertices.AddRange(BuildVertices(loweredPoints, parameters));
                 result.Curve.AddRange(KtbReader.BuildVerticalCurve(result.Vertices));
                 result.Guides.AddRange(KtbReader.BuildVerticalCurveGuides(result.Vertices));
-                ClampDesignCurveToNominalBaseline(result);
             }
         }
 
@@ -242,33 +240,6 @@ public static class VerticalDesignCalculator
         }
 
         return baseMinimumBurial;
-    }
-
-    private static void ClampDesignCurveToNominalBaseline(DesignProfileResult result)
-    {
-        var curve = result.Curve;
-        var envelope = result.CoverEnvelope;
-        if (curve.Count == 0 || envelope.Count == 0)
-        {
-            return;
-        }
-
-        const double nominalUndershootAllowance = 0.055;
-        for (var i = 0; i < curve.Count; i++)
-        {
-            var pt = curve[i];
-            var nominal = InterpolateEnvelopeValue(envelope, pt.Station, e => e.NominalPipeTopElevation);
-            var deepFloor = InterpolateEnvelopeValue(envelope, pt.Station, e => e.PreferredLowerElevation);
-            var shallowCeiling =
-                InterpolateEnvelopeValue(envelope, pt.Station, e => e.PreferredUpperElevation) - LiftClearance;
-            var zAdjusted = Math.Clamp(
-                Math.Max(pt.Elevation, nominal - nominalUndershootAllowance),
-                deepFloor,
-                shallowCeiling);
-            curve[i] = new ProfilePoint(pt.Station, zAdjusted);
-        }
-
-        curve.Sort(static (a, b) => a.Station.CompareTo(b.Station));
     }
 
     private static List<ProfilePoint> SimplifyTerrainProfile(IReadOnlyList<ProfilePoint> terrain, double tolerance)

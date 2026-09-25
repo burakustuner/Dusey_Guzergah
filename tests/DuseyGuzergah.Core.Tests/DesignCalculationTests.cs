@@ -96,6 +96,30 @@ public sealed class DesignCalculationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public void Crest_curve_stays_an_arc_instead_of_a_flat_top()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0d; station <= 400; station += 5)
+        {
+            var rise = station <= 200 ? station * 0.08 : (400 - station) * 0.08;
+            terrain.Add(new ProfilePoint(station, 100 + rise));
+        }
+
+        var result = VerticalDesignCalculator.Calculate(terrain, DesktopDefaults());
+        var crest = result.Curve.Where(point => point.Station is > 170 and < 230).ToList();
+        Assert.True(crest.Count >= 8);
+        var flatRun = 1;
+        var longestFlat = 1;
+        for (var i = 1; i < crest.Count; i++)
+        {
+            flatRun = Math.Abs(crest[i].Elevation - crest[i - 1].Elevation) < 0.002 ? flatRun + 1 : 1;
+            longestFlat = Math.Max(longestFlat, flatRun);
+        }
+
+        Assert.True(longestFlat < 4, $"düz tepe örnek sayısı {longestFlat}");
+    }
+
+    [Fact]
     public void Prune_removes_vertices_that_only_follow_small_ripples()
     {
         var terrain = new List<ProfilePoint>();
