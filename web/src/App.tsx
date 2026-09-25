@@ -70,6 +70,7 @@ export default function App() {
   const [status, setStatus] = useState('KSE ve isteğe bağlı KTB seçin.')
   const [error, setError] = useState('')
   const [rows, setRows] = useState<EditorRow[]>([])
+  const [dragPreview, setDragPreview] = useState<{ id: string; station: number; elevation: number } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [applied, setApplied] = useState<AppliedAlignment | null>(null)
   const [historyFlags, setHistoryFlags] = useState({ undo: false, redo: false })
@@ -440,7 +441,20 @@ export default function App() {
           selectedEditorId={selectedId}
           onSelectEditor={(id) => selectRow(id, false)}
           onMoveEditor={(id, station, elevation) => changeRow(id, { station, elevation }, false)}
-          onFinishEditorDrag={() => setEditorRows(rowsRef.current, 'commit')}
+          onPreviewEditor={(id, station, elevation) => {
+            setDragPreview((current) => (
+              current
+              && current.id === id
+              && Math.abs(current.station - station) < 1e-4
+              && Math.abs(current.elevation - elevation) < 1e-4
+                ? current
+                : { id, station, elevation }
+            ))
+          }}
+          onFinishEditorDrag={() => {
+            setDragPreview(null)
+            setEditorRows(rowsRef.current, 'commit')
+          }}
           onPick={pickAt}
           onContextMenuAt={(x, y, station, elevation) => setMenu({ x, y, station, elevation })}
         />
@@ -528,6 +542,7 @@ export default function App() {
         onRedo={redo}
         onSelect={selectRow}
         onChange={changeRow}
+        dragPreview={dragPreview}
       />
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>

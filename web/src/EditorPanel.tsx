@@ -23,6 +23,7 @@ type Props = {
   onRedo: () => void
   onSelect: (id: string, zoom: boolean) => void
   onChange: (id: string, patch: Partial<EditorRow>, commit: boolean) => void
+  dragPreview: { id: string; station: number; elevation: number } | null
 }
 
 function commitOnEnter(event: KeyboardEvent<HTMLInputElement>) {
@@ -46,14 +47,10 @@ function NumberCell({
 }) {
   const [text, setText] = useState(value.toFixed(digits))
   const [focused, setFocused] = useState(false)
-  useEffect(() => {
-    if (!focused) {
-      setText(value.toFixed(digits))
-    }
-  }, [value, digits, focused])
+  const display = focused ? text : value.toFixed(digits)
   return (
     <input
-      value={text}
+      value={display}
       onFocus={() => {
         setFocused(true)
         onActivate?.()
@@ -77,14 +74,10 @@ function NumberCell({
 function StationCell({ value, onCommit, onActivate }: { value: number; onCommit: (value: number) => void; onActivate?: () => void }) {
   const [text, setText] = useState(formatChainage(value))
   const [focused, setFocused] = useState(false)
-  useEffect(() => {
-    if (!focused) {
-      setText(formatChainage(value))
-    }
-  }, [value, focused])
+  const display = focused ? text : formatChainage(value)
   return (
     <input
-      value={text}
+      value={display}
       onFocus={() => {
         setFocused(true)
         onActivate?.()
@@ -117,6 +110,14 @@ export default function EditorPanel(props: Props) {
   const end = Math.min(rowCount, Math.ceil((scrollTop + viewport) / rowHeight) + overscan)
   const padTop = start * rowHeight
   const padBottom = Math.max(0, (rowCount - end) * rowHeight)
+  const preview = props.dragPreview
+  const shown = preview
+    ? props.rows.map((row) => (
+        row.id === preview.id
+          ? { ...row, station: preview.station, elevation: preview.elevation }
+          : row
+      ))
+    : props.rows
 
   useEffect(() => {
     const node = scrollRef.current
@@ -146,12 +147,15 @@ export default function EditorPanel(props: Props) {
     if (index < 0) {
       return
     }
-    const top = index * rowHeight
+    const header = node.querySelector('thead')?.offsetHeight ?? 0
+    const top = header + index * rowHeight
     const bottom = top + rowHeight
-    if (top < node.scrollTop) {
-      node.scrollTop = top
-    } else if (bottom > node.scrollTop + node.clientHeight) {
-      node.scrollTop = bottom - node.clientHeight
+    const visibleTop = node.scrollTop + header
+    const visibleBottom = node.scrollTop + node.clientHeight - 8
+    if (top < visibleTop) {
+      node.scrollTop = Math.max(0, top - header)
+    } else if (bottom > visibleBottom) {
+      node.scrollTop = Math.max(0, bottom - node.clientHeight + 8)
     }
   }, [props.selectedId, props.rows, rowHeight])
 
@@ -196,9 +200,9 @@ export default function EditorPanel(props: Props) {
                 <td colSpan={10} />
               </tr>
             )}
-            {props.rows.slice(start, end).map((row, offset) => {
+            {shown.slice(start, end).map((row, offset) => {
               const index = start + offset
-              const derived = derivedCell(props.rows, index)
+              const derived = derivedCell(shown, index)
               const mark = () => props.onSelect(row.id, true)
               return (
                 <tr

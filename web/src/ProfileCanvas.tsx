@@ -29,6 +29,7 @@ type Props = {
   selectedEditorId: string | null
   onSelectEditor: (id: string) => void
   onMoveEditor: (id: string, station: number, elevation: number) => void
+  onPreviewEditor: (id: string, station: number, elevation: number) => void
   onFinishEditorDrag: () => void
   onPick: (station: number) => void
   onContextMenuAt: (x: number, y: number, station: number, elevation: number) => void
@@ -351,6 +352,44 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: View, width: number, heig
   ctx.restore()
 }
 
+function signedMeters(value: number, digits: number) {
+  const text = value.toFixed(digits)
+  return value > 0 ? `+${text}` : text
+}
+
+function drawDragTag(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  station: number,
+  elevation: number,
+  originStation: number,
+  originElevation: number,
+) {
+  const line1 = `${formatChainage(station)}   kot ${elevation.toFixed(3)}`
+  const line2 = `Δ ${signedMeters(station - originStation, 2)} m   Δkot ${signedMeters(elevation - originElevation, 3)} m`
+  ctx.save()
+  ctx.font = '12px Segoe UI, sans-serif'
+  const boxW = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width) + 16
+  const boxH = 36
+  let left = x + 14
+  if (left + boxW > width - 8) {
+    left = x - 14 - boxW
+  }
+  const top = Math.max(8, y - 28)
+  ctx.fillStyle = 'rgba(255,255,255,0.94)'
+  ctx.strokeStyle = '#0078d4'
+  ctx.lineWidth = 1
+  ctx.fillRect(left, top, boxW, boxH)
+  ctx.strokeRect(left, top, boxW, boxH)
+  ctx.fillStyle = '#24292f'
+  ctx.fillText(line1, left + 8, top + 14)
+  ctx.fillStyle = '#0078d4'
+  ctx.fillText(line2, left + 8, top + 28)
+  ctx.restore()
+}
+
 function drawScale(
   ctx: CanvasRenderingContext2D,
   view: View,
@@ -523,6 +562,7 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
     selectedEditorId,
     onSelectEditor,
     onMoveEditor,
+    onPreviewEditor,
     onFinishEditorDrag,
     onPick,
     onContextMenuAt,
@@ -539,6 +579,7 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
   const [size, setSize] = useState({ width: 0, height: 0 })
   const frameRef = useRef<number | null>(null)
   const focusFrameRef = useRef<number | null>(null)
+  const previewFrameRef = useRef<number | null>(null)
   const readoutRef = useRef<HTMLDivElement>(null)
   const paintRef = useRef<() => void>(() => {})
   const redrawRef = useRef<() => void>(() => {})
@@ -579,7 +620,7 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
     | { kind: 'pan'; x: number; y: number; view: View }
     | { kind: 'measure'; x: number; y: number; currentX: number; currentY: number }
     | { kind: 'window'; x: number; y: number; currentX: number; currentY: number }
-    | { kind: 'vertex'; id: string }
+    | { kind: 'vertex'; id: string; originStation: number; originElevation: number }
     | null
   >(null)
 
@@ -964,6 +1005,22 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
         ctx.fill()
         ctx.stroke()
       }
+      const dragTag = dragRef.current
+      if (dragTag?.kind === 'vertex') {
+        const dragged = liveRows.find((row) => row.id === dragTag.id)
+        if (dragged) {
+          drawDragTag(
+            ctx,
+            screenX(view, dragged.station),
+            screenY(view, dragged.elevation),
+            size.width,
+            dragged.station,
+            dragged.elevation,
+            dragTag.originStation,
+            dragTag.originElevation,
+          )
+        }
+      }
     }
 
     drawScale(ctx, view, size.width, baseScaleRef.current)
@@ -974,6 +1031,10 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
   }, [session, design, layers, pipeOffset, size.width, size.height, alignmentCurve, alignmentGuides, alignmentVertices, editorRows, selectedEditorId, tool])
 
   function commitDraft(id: string) {
+    if (previewFrameRef.current !== null) {
+      cancelAnimationFrame(previewFrameRef.current)
+      previewFrameRef.current = null
+    }
     const draft = draftRef.current
     const row = draft?.find((item) => item.id === id)
     if (!row) {
@@ -984,6 +1045,21 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
     heldRef.current = { id: row.id, station: row.station, elevation: row.elevation }
     onMoveEditor(row.id, row.station, row.elevation)
     onFinishEditorDrag()
+  }
+
+  function schedulePreview(id: string) {
+    if (previewFrameRef.current !== null) {
+      return
+    }
+    previewFrameRef.current = requestAnimationFrame(() => {
+      previewFrameRef.current = null
+      const row = draftRef.current?.find((item) => item.id === id)
+      const drag = dragRef.current
+      if (!row || drag?.kind !== 'vertex' || drag.id !== id) {
+        return
+      }
+      onPreviewEditor(row.id, row.station, row.elevation)
+    })
   }
 
   function localPoint(event: { currentTarget: HTMLCanvasElement; clientX: number; clientY: number }) {
@@ -1036,7 +1112,12 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
               onSelectEditor(hit.id)
               draftRef.current = editorRows.map((row) => ({ ...row }))
               heldRef.current = null
-              dragRef.current = { kind: 'vertex', id: hit.id }
+              dragRef.current = {
+                kind: 'vertex',
+                id: hit.id,
+                originStation: hit.station,
+                originElevation: hit.elevation,
+              }
               return
             }
           }
@@ -1071,6 +1152,7 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
             if (row) {
               row.station = stationAt(view, point.x)
               row.elevation = elevationAt(view, point.y)
+              schedulePreview(row.id)
             }
           } else {
             drag.currentX = point.x
