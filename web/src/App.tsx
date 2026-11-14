@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useGoogleAuth } from './auth'
 import { calculateDesign, createSession, exportEditorKtb, exportKtb, fetchWarnings } from './api'
 import {
   createEditorRow,
@@ -48,6 +49,7 @@ type MenuState = { x: number; y: number; station: number; elevation: number }
 const emptyAlignment: AppliedAlignment = { vertices: [], curve: [], guides: [] }
 
 export default function App() {
+  const auth = useGoogleAuth()
   const canvasRef = useRef<ProfileCanvasHandle>(null)
   const historyRef = useRef(new EditorHistory())
   const rowsRef = useRef<EditorRow[]>([])
@@ -393,7 +395,12 @@ export default function App() {
 
   return (
     <div className="app" onClick={() => setMenu(null)}>
+      {!auth.user ? (
+        <div className="authbar">Ana sayfaya yönlendiriliyor…</div>
+      ) : (
+      <>
       <header className="toolbar">
+        <a className="home-link" href="/">Ana sayfa</a>
         <div className="brand">Düşey Güzergâh</div>
         <label className="file">
           Arazi (KSE)
@@ -639,6 +646,8 @@ export default function App() {
         <span>{status}</span>
         {error && <span className="error">{error}</span>}
       </footer>
+      </>
+      )}
     </div>
   )
 }

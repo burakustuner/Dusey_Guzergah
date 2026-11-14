@@ -1,4 +1,24 @@
+import { clearToken, readToken } from './auth'
 import type { DesignParameters, DesignResult, Guide, Point, SessionResponse, Vertex, WarningThresholds } from './types'
+
+function authHeaders(init?: HeadersInit) {
+  const headers = new Headers(init)
+  const token = readToken()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  return headers
+}
+
+async function send(path: string, init: RequestInit = {}) {
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const response = await fetch(`${base}${path}`, { ...init, headers: authHeaders(init.headers) })
+  if (response.status === 401) {
+    clearToken()
+    window.dispatchEvent(new Event('dusey-auth-lost'))
+  }
+  return response
+}
 
 async function errorMessage(response: Response): Promise<string> {
   const text = await response.text()
@@ -19,7 +39,7 @@ export async function createSession(kse: File, ktb: File | null): Promise<Sessio
   if (ktb) {
     form.append('ktb', ktb)
   }
-  const response = await fetch('/api/sessions', { method: 'POST', body: form })
+  const response = await send('/api/sessions', { method: 'POST', body: form })
   if (!response.ok) {
     throw new Error(await errorMessage(response))
   }
@@ -27,7 +47,7 @@ export async function createSession(kse: File, ktb: File | null): Promise<Sessio
 }
 
 export async function calculateDesign(sessionId: string, parameters: DesignParameters): Promise<DesignResult> {
-  const response = await fetch(`/api/sessions/${sessionId}/calculate`, {
+  const response = await send(`/api/sessions/${sessionId}/calculate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(parameters),
@@ -39,7 +59,7 @@ export async function calculateDesign(sessionId: string, parameters: DesignParam
 }
 
 export async function previewCurve(vertices: Vertex[]): Promise<{ curve: Point[]; guides: Guide[] }> {
-  const response = await fetch('/api/alignment/curve', {
+  const response = await send('/api/alignment/curve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(vertices),
@@ -56,7 +76,7 @@ export async function fetchWarnings(
   parameters: DesignParameters,
   vertices: Vertex[],
 ): Promise<string[]> {
-  const response = await fetch(`/api/sessions/${sessionId}/warnings`, {
+  const response = await send(`/api/sessions/${sessionId}/warnings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ thresholds, parameters, vertices }),
@@ -78,7 +98,7 @@ async function downloadKtb(response: Response, fileName: string) {
 }
 
 export async function exportKtb(sessionId: string): Promise<void> {
-  const response = await fetch(`/api/sessions/${sessionId}/export`, { method: 'POST' })
+  const response = await send(`/api/sessions/${sessionId}/export`, { method: 'POST' })
   if (!response.ok) {
     throw new Error(await errorMessage(response))
   }
@@ -88,7 +108,7 @@ export async function exportKtb(sessionId: string): Promise<void> {
 export async function readCrossingSheet(file: File): Promise<string[][]> {
   const form = new FormData()
   form.append('file', file)
-  const response = await fetch('/api/crossings/read', { method: 'POST', body: form })
+  const response = await send('/api/crossings/read', { method: 'POST', body: form })
   if (!response.ok) {
     throw new Error(await errorMessage(response))
   }
@@ -96,7 +116,7 @@ export async function readCrossingSheet(file: File): Promise<string[][]> {
 }
 
 export async function exportEditorKtb(sessionId: string, vertices: Vertex[]): Promise<void> {
-  const response = await fetch(`/api/sessions/${sessionId}/export-editor`, {
+  const response = await send(`/api/sessions/${sessionId}/export-editor`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(vertices),

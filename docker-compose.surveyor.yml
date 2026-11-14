@@ -1,0 +1,20 @@
+name: dusey-guzergah
+
+services:
+  dusey-guzergah:
+    build: .
+    image: dusey-guzergah:latest
+    container_name: dusey-guzergah
+    environment:
+      Sessions__TtlMinutes: "120"
+    volumes:
+      - ./sessions:/data/sessions
+    restart: unless-stopped
+    env_file:
+      - .env.surveyor
+    networks:
+      - proxy-net
+
+networks:
+  proxy-net:
+    external: true

@@ -5,3 +5,5 @@ dist/
 .vs/
 *.user
 .docs/*
+.env.surveyor
+sessions/

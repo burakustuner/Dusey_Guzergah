@@ -1,9 +1,12 @@
+using DuseyGuzergah.Api.Auth;
 using DuseyGuzergah.Api.Sessions;
 using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<DesignSessionOptions>(builder.Configuration.GetSection(DesignSessionOptions.SectionName));
+builder.Services.Configure<GoogleAuthOptions>(builder.Configuration.GetSection(GoogleAuthOptions.SectionName));
+builder.Services.AddHttpClient("google", client => client.Timeout = TimeSpan.FromSeconds(8));
 builder.Services.AddSingleton<IDesignSessionStore, FileDesignSessionStore>();
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
@@ -40,6 +43,7 @@ else if (app.Configuration.GetValue("HttpsRedirection", true))
 }
 
 app.UseAuthorization();
+app.UseMiddleware<GoogleIdTokenMiddleware>();
 app.MapControllers();
 
 var spaDist = app.Configuration["SpaPath"] is { Length: > 0 } configuredSpa
