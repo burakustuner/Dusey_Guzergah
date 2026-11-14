@@ -52,11 +52,20 @@ public sealed record DesignParameters(
     double HotBendMaxAngleDeg = 45,
     double HotBendTangentM = 1,
     double StraightEndM = 1.8,
-    double MergeExtraBurial = 2,
-    IReadOnlyList<SpecialCrossing>? Crossings = null);
+    double MergeExtraBurial = 0.40,
+    IReadOnlyList<SpecialCrossing>? Crossings = null,
+    /// <summary>Boru boyu başına izin verilen en büyük sapma açısı (°); 0 ise yalnızca MinimumRadius geçerli.</summary>
+    double MaxDeflectionDeg = 0,
+    /// <summary>Özel geçişin iki yanında düz bırakılan mesafe (m).</summary>
+    double CrossingBufferM = 6.0,
+    /// <summary>Düz bölümden koridora bağlanan rampanın en kısa boyu (m).</summary>
+    double CrossingRampMinM = 12.5);
 
 public sealed class DesignProfileResult
 {
+    /// <summary>Zarf ve profil listeleri boru üstü kotundadır; Vertices/Curve/Guides eksen kotundadır (üst − bu değer).</summary>
+    public double AxisOffset { get; set; }
+
     public List<CoverEnvelopePoint> CoverEnvelope { get; } = [];
 
     public List<VerticalAlignmentVertex> Vertices { get; } = [];

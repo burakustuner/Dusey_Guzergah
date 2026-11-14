@@ -40,6 +40,7 @@ export type SessionResponse = {
 }
 
 export type DesignResult = {
+  axisOffset: number
   vertices: Vertex[]
   curve: Point[]
   guides: Guide[]
@@ -75,6 +76,9 @@ export type DesignParameters = {
   straightEndM: number
   mergeExtraBurial: number
   crossings: DesignCrossing[]
+  maxDeflectionDeg: number
+  crossingBufferM: number
+  crossingRampMinM: number
 }
 
 export type DesignForm = {
@@ -94,6 +98,9 @@ export type DesignForm = {
   hotBendMaxAngleDeg: number
   hotBendTangentM: number
   mergeExtraBurial: number
+  maxDeflectionDeg: number
+  crossingBufferM: number
+  crossingRampMinM: number
 }
 
 export type Layers = {
@@ -141,7 +148,10 @@ export const defaultForm: DesignForm = {
   hotBendRadiusFactor: 5,
   hotBendMaxAngleDeg: 45,
   hotBendTangentM: 1,
-  mergeExtraBurial: 2,
+  mergeExtraBurial: 0.4,
+  maxDeflectionDeg: 7.2,
+  crossingBufferM: 6,
+  crossingRampMinM: 12.5,
 }
 
 export const defaultLayers: Layers = {
@@ -178,6 +188,9 @@ export function toDesignParameters(
     hotBendTangentM: form.hotBendTangentM,
     straightEndM: form.straightEndM,
     mergeExtraBurial: form.mergeExtraBurial,
+    maxDeflectionDeg: form.maxDeflectionDeg,
+    crossingBufferM: form.crossingBufferM,
+    crossingRampMinM: form.crossingRampMinM,
     crossings: crossings
       .filter((row) => row.depth > 0 && row.endKm !== row.startKm)
       .map((row) => ({

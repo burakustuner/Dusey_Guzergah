@@ -85,6 +85,16 @@ export async function exportKtb(sessionId: string): Promise<void> {
   await downloadKtb(response, 'GÜZERGAH_dusey.KTB')
 }
 
+export async function readCrossingSheet(file: File): Promise<string[][]> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch('/api/crossings/read', { method: 'POST', body: form })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response))
+  }
+  return response.json() as Promise<string[][]>
+}
+
 export async function exportEditorKtb(sessionId: string, vertices: Vertex[]): Promise<void> {
   const response = await fetch(`/api/sessions/${sessionId}/export-editor`, {
     method: 'POST',

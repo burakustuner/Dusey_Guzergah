@@ -44,7 +44,10 @@ export const botasStandard = {
   hotBendRadiusFactor: 5,
   hotBendMaxAngleDeg: 45,
   hotBendTangentM: 1,
-  mergeExtraBurial: 2,
+  mergeExtraBurial: 0.4,
+  maxDeflectionDeg: 7.2,
+  crossingBufferM: 6,
+  crossingRampMinM: 12.5,
 }
 
 export function applyBotas(inches: number) {
@@ -66,7 +69,18 @@ export function applyBotas(inches: number) {
     hotBendMaxAngleDeg: botasStandard.hotBendMaxAngleDeg,
     hotBendTangentM: botasStandard.hotBendTangentM,
     mergeExtraBurial: botasStandard.mergeExtraBurial,
+    maxDeflectionDeg: botasStandard.maxDeflectionDeg,
+    crossingBufferM: botasStandard.crossingBufferM,
+    crossingRampMinM: botasStandard.crossingRampMinM,
   }
+}
+
+/** Boru boyu başına sapma açısının karşılığı olan yarıçap ile soğuk büküm yarıçapından büyük olanı. */
+export function effectiveMinimumRadiusM(minimumRadius: number, pipeLength: number, maxDeflectionDeg: number) {
+  if (maxDeflectionDeg <= 0 || pipeLength <= 0) {
+    return minimumRadius
+  }
+  return Math.max(minimumRadius, pipeLength / (maxDeflectionDeg * Math.PI / 180))
 }
 
 export function bendFieldsForDiameter(inches: number) {

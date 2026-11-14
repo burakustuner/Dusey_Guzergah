@@ -88,11 +88,32 @@ public sealed class DesignCalculationTests : IClassFixture<ApiFactory>
         var parameters = DesktopDefaults() with
         {
             MinimumCover = 1.0,
-            MinimumRadius = 18.288,
-            MergeExtraBurial = 2
+            MinimumRadius = 18.288
         };
         var result = VerticalDesignCalculator.Calculate(terrain, parameters);
-        Assert.InRange(result.Vertices.Count, 450, 800);
+        Assert.InRange(result.Vertices.Count, 1100, 1450);
+    }
+
+    [Fact]
+    public void Crest_is_kept_close_to_the_ground()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0d; station <= 600; station += 5)
+        {
+            var rise = 0d;
+            if (station is > 200 and < 400)
+            {
+                rise = station <= 300 ? (station - 200) * 0.08 : (400 - station) * 0.08;
+            }
+
+            terrain.Add(new ProfilePoint(station, 100 + rise));
+        }
+
+        var result = VerticalDesignCalculator.Calculate(
+            terrain,
+            DesktopDefaults() with { MinimumCover = 1.0, MergeExtraBurial = 2 });
+        var peak = result.Curve.OrderBy(point => Math.Abs(point.Station - 300)).First();
+        Assert.InRange(108 - peak.Elevation, 0.9, 2.4);
     }
 
     [Fact]
@@ -157,13 +178,105 @@ public sealed class DesignCalculationTests : IClassFixture<ApiFactory>
         Assert.All(inside, point => Assert.InRange(99.85 - point.Elevation, 2.45, 2.55));
     }
 
+    [Fact]
+    public void Vertices_are_written_at_pipe_axis()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0; station <= 400; station += 10)
+        {
+            terrain.Add(new ProfilePoint(station, 100));
+        }
+
+        var result = VerticalDesignCalculator.Calculate(terrain, DesktopDefaults() with { MinimumCover = 1.0 });
+        Assert.Equal(0.1524, result.AxisOffset, 4);
+        Assert.All(result.Vertices, vertex => Assert.InRange(99.85 - (vertex.Elevation + result.AxisOffset), 1.0, 1.45));
+        Assert.All(result.Vertices, vertex => Assert.True(vertex.Elevation < 99.85 - 1.0 - result.AxisOffset + 1e-6));
+    }
+
+    [Fact]
+    public void Every_curve_respects_the_effective_minimum_radius()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0d; station <= 800; station += 5)
+        {
+            var z = 100d;
+            if (station is > 200 and <= 260)
+            {
+                z -= (station - 200) * 0.25;
+            }
+            else if (station is > 260 and < 320)
+            {
+                z -= (320 - station) * 0.25;
+            }
+            else if (station is > 500 and < 600)
+            {
+                z += 6 - Math.Abs(station - 550) * 0.12;
+            }
+
+            terrain.Add(new ProfilePoint(station, z));
+        }
+
+        var parameters = DesktopDefaults() with { MinimumCover = 1.0, MaxDeflectionDeg = 7.2 };
+        var radius = VerticalDesignCalculator.EffectiveMinimumRadius(parameters);
+        Assert.InRange(radius, 95.4, 95.6);
+
+        var result = VerticalDesignCalculator.Calculate(terrain, parameters);
+        var vertices = result.Vertices;
+        for (var i = 1; i < vertices.Count - 1; i++)
+        {
+            var gradeIn = (vertices[i].Elevation - vertices[i - 1].Elevation) / (vertices[i].Station - vertices[i - 1].Station);
+            var gradeOut = (vertices[i + 1].Elevation - vertices[i].Elevation) / (vertices[i + 1].Station - vertices[i].Station);
+            var required = radius * Math.Abs(gradeOut - gradeIn);
+            Assert.True(
+                vertices[i].CurveLength >= required - 1e-3,
+                $"KM {vertices[i].Station:0.00}: L={vertices[i].CurveLength:0.00} < R·Δg={required:0.00}");
+        }
+    }
+
+    [Fact]
+    public void Crossing_is_flat_through_buffers_and_ramps_out_at_least_minimum_length()
+    {
+        var terrain = new List<ProfilePoint>();
+        for (var station = 0; station <= 400; station += 5)
+        {
+            terrain.Add(new ProfilePoint(station, 100));
+        }
+
+        var parameters = DesktopDefaults() with
+        {
+            MinimumCover = 1.0,
+            MaxDeflectionDeg = 7.2,
+            Crossings = [new SpecialCrossing("yol", "karayolu", 180, 220, 5.0)]
+        };
+
+        var result = VerticalDesignCalculator.Calculate(terrain, parameters);
+        var flat = result.Curve.Where(point => point.Station >= 174 && point.Station <= 226).ToList();
+        Assert.NotEmpty(flat);
+        var level = flat[0].Elevation;
+        Assert.All(flat, point => Assert.Equal(level, point.Elevation, 3));
+        Assert.True(level + result.AxisOffset <= 99.85 - 5.0 + 1e-6);
+
+        var vertices = result.Vertices;
+        var leftPi = vertices.Last(vertex => vertex.Station < 180);
+        var rightPi = vertices.First(vertex => vertex.Station > 220);
+        Assert.Equal(level, leftPi.Elevation, 3);
+        Assert.Equal(level, rightPi.Elevation, 3);
+        Assert.True(leftPi.Station + leftPi.TangentOut <= 174 + 1e-3);
+        Assert.True(rightPi.Station - rightPi.TangentIn >= 226 - 1e-3);
+
+        var beforeLeft = vertices[vertices.IndexOf(leftPi) - 1];
+        var afterRight = vertices[vertices.IndexOf(rightPi) + 1];
+        Assert.True(leftPi.Station - beforeLeft.Station >= 12.5 - 1e-6);
+        Assert.True(afterRight.Station - rightPi.Station >= 12.5 - 1e-6);
+    }
+
     private static DesignParameters DesktopDefaults() => new(
         TargetCover: 1.20,
         CoverTolerance: 0.05,
         MinimumCover: 1.20,
         MaximumCover: 4.20,
         StrippingDepth: 0.15,
-        PipeDiameter: 12,
+        PipeDiameter: 0.3048,
         PipeLength: 12,
         MinimumSegmentLength: 24,
         MinimumRadius: 60);

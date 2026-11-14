@@ -257,9 +257,22 @@ public sealed class SessionsController : ControllerBase
             parameters.PipeLength < 0 ||
             parameters.MinimumSegmentLength < 0 ||
             parameters.MinimumRadius < 0 ||
-            parameters.MergeExtraBurial < 0)
+            parameters.MergeExtraBurial < 0 ||
+            parameters.MaxDeflectionDeg < 0 ||
+            parameters.CrossingBufferM < 0 ||
+            parameters.CrossingRampMinM < 0)
         {
             return "Hesap parametreleri negatif olamaz.";
+        }
+
+        if (parameters.PipeDiameter > 2)
+        {
+            return "Boru çapı metre cinsinden olmalı (en fazla 2 m).";
+        }
+
+        if (parameters.MaxDeflectionDeg >= 89)
+        {
+            return "Sapma açısı 89°'den küçük olmalı.";
         }
 
         if (parameters.MaximumCover + 1e-9 < parameters.TargetCover)

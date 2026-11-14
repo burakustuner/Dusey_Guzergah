@@ -69,7 +69,7 @@ public sealed class EditorApiTests : IClassFixture<ApiFactory>
                 minimumCover = 1.2,
                 maximumCover = 4.2,
                 strippingDepth = 0.15,
-                pipeDiameter = 12.0,
+                pipeDiameter = 0.3048,
                 pipeLength = 12.0,
                 minimumSegmentLength = 24.0,
                 minimumRadius = 60.0

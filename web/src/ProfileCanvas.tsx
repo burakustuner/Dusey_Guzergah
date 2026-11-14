@@ -304,6 +304,49 @@ function interpolateElevation(profile: Point[], station: number): number {
   return left.elevation + (right.elevation - left.elevation) * ratio
 }
 
+function nearestPipeDepth(
+  lines: { name: string; points: Point[] }[],
+  terrain: Point[],
+  view: View,
+  x: number,
+  y: number,
+) {
+  let best: { name: string; station: number; depth: number; distance: number } | null = null
+  const cursorStation = stationAt(view, x)
+  for (const line of lines) {
+    for (let index = 1; index < line.points.length; index++) {
+      const a = line.points[index - 1]
+      const b = line.points[index]
+      if (b.station < cursorStation - 800 || a.station > cursorStation + 800) {
+        continue
+      }
+      const ax = screenX(view, a.station)
+      const ay = screenY(view, a.elevation)
+      const bx = screenX(view, b.station)
+      const by = screenY(view, b.elevation)
+      const abx = bx - ax
+      const aby = by - ay
+      const length2 = abx * abx + aby * aby
+      const t = length2 < 1e-6 ? 0 : Math.min(1, Math.max(0, ((x - ax) * abx + (y - ay) * aby) / length2))
+      const px = ax + abx * t
+      const py = ay + aby * t
+      const distance = Math.hypot(x - px, y - py)
+      if (distance > 14 || (best && distance >= best.distance)) {
+        continue
+      }
+      const station = a.station + (b.station - a.station) * t
+      const elevation = a.elevation + (b.elevation - a.elevation) * t
+      best = {
+        name: line.name,
+        station,
+        depth: interpolateElevation(terrain, station) - elevation,
+        distance,
+      }
+    }
+  }
+  return best
+}
+
 function niceStep(span: number, divisions: number) {
   const rough = Math.max(span / divisions, 1e-6)
   const power = 10 ** Math.floor(Math.log10(rough))
@@ -581,6 +624,7 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
   const focusFrameRef = useRef<number | null>(null)
   const previewFrameRef = useRef<number | null>(null)
   const readoutRef = useRef<HTMLDivElement>(null)
+  const depthTipRef = useRef<HTMLDivElement>(null)
   const paintRef = useRef<() => void>(() => {})
   const redrawRef = useRef<() => void>(() => {})
   const sceneRef = useRef({
@@ -864,9 +908,10 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
     const terrain = sliceByStation(session.terrain, minStation, maxStation)
 
     if (layers.corridor && design) {
-      strokePolyline(ctx, sliceByStation(design.preferredLowerProfile, minStation, maxStation), view, 'rgba(191,219,254,0.95)', 1, [4, 4])
-      strokePolyline(ctx, sliceByStation(design.preferredUpperProfile, minStation, maxStation), view, 'rgba(191,219,254,0.95)', 1, [4, 4])
-      strokePolyline(ctx, sliceByStation(design.minimumCoverUpperProfile, minStation, maxStation), view, 'rgba(36,41,47,0.7)', 1.1, [7, 5])
+      const axis = design.axisOffset ?? 0
+      strokePolyline(ctx, sliceByStation(design.preferredLowerProfile, minStation, maxStation), view, 'rgba(191,219,254,0.95)', 1, [4, 4], axis)
+      strokePolyline(ctx, sliceByStation(design.preferredUpperProfile, minStation, maxStation), view, 'rgba(191,219,254,0.95)', 1, [4, 4], axis)
+      strokePolyline(ctx, sliceByStation(design.minimumCoverUpperProfile, minStation, maxStation), view, 'rgba(36,41,47,0.7)', 1.1, [7, 5], axis)
     }
 
     if (layers.terrain) {
@@ -1136,6 +1181,25 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
           if (view && readoutRef.current) {
             readoutRef.current.textContent = `${formatChainage(stationAt(view, point.x))}  ·  kot ${elevationAt(view, point.y).toFixed(2)} m`
           }
+          const tip = depthTipRef.current
+          if (tip && view && session && session.terrain.length > 1) {
+            const lines: { name: string; points: Point[] }[] = []
+            if (layers.calculatedCurve && design && design.curve.length > 1) {
+              lines.push({ name: 'Hesap', points: design.curve })
+            }
+            if (layers.ktb && session.ktbCurve.length > 1) {
+              lines.push({ name: 'KTB', points: session.ktbCurve })
+            }
+            const hit = lines.length > 0 ? nearestPipeDepth(lines, session.terrain, view, point.x, point.y) : null
+            if (hit) {
+              tip.hidden = false
+              tip.style.left = `${point.x + 14}px`
+              tip.style.top = `${Math.max(8, point.y - 42)}px`
+              tip.textContent = `${hit.name}  ${formatChainage(hit.station)}\nAraziye derinlik ${hit.depth.toFixed(2)} m`
+            } else {
+              tip.hidden = true
+            }
+          }
           const drag = dragRef.current
           if (!drag || !view) {
             return
@@ -1159,6 +1223,11 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
             drag.currentY = point.y
           }
           redraw()
+        }}
+        onPointerLeave={() => {
+          if (depthTipRef.current) {
+            depthTipRef.current.hidden = true
+          }
         }}
         onPointerUp={(event) => {
           const drag = dragRef.current
@@ -1192,6 +1261,7 @@ const ProfileCanvas = forwardRef<ProfileCanvasHandle, Props>(function ProfileCan
         }}
       />
       <div ref={readoutRef} className="readout">Profil hazır.</div>
+      <div ref={depthTipRef} className="depth-tip" hidden />
     </div>
   )
 })

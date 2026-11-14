@@ -28,6 +28,7 @@ public static class DesignWarningsEvaluator
         var msgs = new List<string>();
 
         var n = verticesOrdered.Count;
+        var minimumRadius = VerticalDesignCalculator.EffectiveMinimumRadius(designParameters);
 
         /* Ara kurp parametreleri + eğim */
         for (var i = 0; i < n; i++)
@@ -64,9 +65,9 @@ public static class DesignWarningsEvaluator
                 {
                     msgs.Add($"KM {v.Station:0.###}: Yarıçap R≈{v.Radius:0.#} m, soğuk büküm sınırının altında ({cold:0.#} m); sıcak büküm adayı.");
                 }
-                else if (v.Radius + 1e-6 < designParameters.MinimumRadius)
+                else if (v.Radius + 1e-3 < minimumRadius)
                 {
-                    msgs.Add($"KM {v.Station:0.###}: Yaricap R≈{v.Radius:0.#} m, hesaptaki Minimum R ({designParameters.MinimumRadius}) altında.");
+                    msgs.Add($"KM {v.Station:0.###}: Yarıçap R≈{v.Radius:0.#} m, izin verilen en küçük yarıçapın ({minimumRadius:0.#} m) altında.");
                 }
             }
         }

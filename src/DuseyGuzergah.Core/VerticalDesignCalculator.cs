@@ -14,6 +14,12 @@ public static class VerticalDesignCalculator
     /// <summary>Köprülenen istasyonlarda minimum gömü uyarısı için ek tolerans (m); çukurda planlanan dolgu ile uyumlu.</summary>
     private const double NarrowDipBurialRelaxation = 0.42;
 
+    /// <summary>Bir somedeki kurp teğeti, komşu bacağın en fazla bu oranını kullanır (KTB okuyucusundaki 0,49 sınırıyla aynı).</summary>
+    private const double MaxTangentShare = 0.49;
+    private const double CrossingRampSearchMax = 30.0;
+    private const double CrossingRampStep = 0.10;
+    private const int CoverRepairRounds = 3;
+
     public static DesignProfileResult Calculate(IReadOnlyList<ProfilePoint> terrainProfile, DesignParameters parameters)
     {
         var result = new DesignProfileResult();
@@ -28,101 +34,516 @@ public static class VerticalDesignCalculator
             orderedTerrain,
             parameters,
             result);
+        var envelope = result.CoverEnvelope;
 
         var coarseDpBase = Math.Max(parameters.CoverTolerance * 4, 0.20);
         var dpTolerance = Math.Max(coarseDpBase * 1.28, 0.38);
         var majorBreakpoints = SimplifyTerrainProfile(orderedTerrain, dpTolerance);
         var maximumCover = Math.Max(parameters.MaximumCover, parameters.TargetCover);
-
-        var chordBurialSlack = ComputeChordBurialSlack(parameters.TargetCover, maximumCover);
-
         var minAcceptableBurialDepth = BaseMinBurial(parameters);
+        var minimumRadius = EffectiveMinimumRadius(parameters);
 
-        var simplifiedPoints = SelectPrimaryIntersections(
-            result.CoverEnvelope,
-            majorBreakpoints,
-            parameters.TargetCover,
-            maximumCover,
-            chordBurialSlack);
-        simplifiedPoints = LiftToShallowestAllowed(simplifiedPoints, result.CoverEnvelope);
-        simplifiedPoints = CollapseRedundantVertices(
-            simplifiedPoints,
-            result.CoverEnvelope,
-            parameters.MinimumSegmentLength,
-            parameters.TargetCover,
-            maximumCover,
-            parameters.CoverTolerance);
-        simplifiedPoints = RefinePolylineAgainstNominalBurial(
-            simplifiedPoints,
-            result.CoverEnvelope,
-            parameters.TargetCover,
-            Math.Max(0.10, chordBurialSlack - 0.08),
-            parameters.MinimumSegmentLength);
-        simplifiedPoints = RefinePolylineAgainstNominalBurial(
-            simplifiedPoints,
-            result.CoverEnvelope,
-            parameters.TargetCover,
-            0.08,
-            parameters.MinimumSegmentLength);
-        simplifiedPoints = LiftToShallowestAllowed(simplifiedPoints, result.CoverEnvelope);
+        var (points, locked) = BuildAlignmentPoints(envelope, majorBreakpoints, parameters, maximumCover, minimumRadius);
+        points = EnforceRadiusLimits(points, locked, envelope, parameters, minimumRadius);
 
-        simplifiedPoints = SnapPolylineUsingVerticalCurveBurial(
-            simplifiedPoints,
-            result.CoverEnvelope,
-            parameters,
-            burialSlackBeyondTarget: 0.10);
+        var pipeTopVertices = BuildVertices(points, parameters, minimumRadius).ToList();
+        var pipeTopCurve = KtbReader.BuildVerticalCurve(pipeTopVertices);
 
-        simplifiedPoints = PruneDenseVertices(
-            simplifiedPoints,
-            result.CoverEnvelope,
-            parameters,
-            maximumCover);
-
-        result.Vertices.AddRange(BuildVertices(simplifiedPoints, parameters));
-        result.Curve.AddRange(KtbReader.BuildVerticalCurve(result.Vertices));
-        result.Guides.AddRange(KtbReader.BuildVerticalCurveGuides(result.Vertices));
-
-        var initialIssues = CheckBurialDepth(
-                result.Curve,
-                result.CoverEnvelope,
-                parameters,
-                minAcceptableBurialDepth,
-                nominalBridgeLiftProfile)
-            .ToList();
-        if (initialIssues.Count > 0)
+        for (var round = 0; round < CoverRepairRounds; round++)
         {
-            var requestedShift = initialIssues.Max(
-                                     issue => EffectiveMinBurialForStation(
-                                                  issue.Station,
-                                                  minAcceptableBurialDepth,
-                                                  nominalBridgeLiftProfile)
-                                              - issue.Cover)
-                                 + LiftClearance;
-            var downwardShift = Math.Min(Math.Max(0, requestedShift), parameters.TargetCover);
-            if (downwardShift > 0)
+            var issues = CheckBurialDepth(
+                    pipeTopCurve,
+                    envelope,
+                    parameters,
+                    minAcceptableBurialDepth,
+                    nominalBridgeLiftProfile)
+                .ToList();
+            if (issues.Count == 0)
             {
-                result.Vertices.Clear();
-                result.Curve.Clear();
-                result.Guides.Clear();
-
-                var loweredPoints = simplifiedPoints
-                    .Select(point => new ProfilePoint(point.Station, point.Elevation - downwardShift))
-                    .ToList();
-                result.Vertices.AddRange(BuildVertices(loweredPoints, parameters));
-                result.Curve.AddRange(KtbReader.BuildVerticalCurve(result.Vertices));
-                result.Guides.AddRange(KtbReader.BuildVerticalCurveGuides(result.Vertices));
+                break;
             }
+
+            var lowered = LowerOnlyShallowSpans(
+                points,
+                locked,
+                issues,
+                minAcceptableBurialDepth,
+                nominalBridgeLiftProfile,
+                parameters.TargetCover);
+            if (!lowered.Where((point, index) => point.Elevation < points[index].Elevation - 1e-6).Any())
+            {
+                break;
+            }
+
+            points = EnforceRadiusLimits(lowered, locked, envelope, parameters, minimumRadius);
+            pipeTopVertices = BuildVertices(points, parameters, minimumRadius).ToList();
+            pipeTopCurve = KtbReader.BuildVerticalCurve(pipeTopVertices);
         }
 
         result.CoverIssues.AddRange(
             CheckBurialDepth(
-                result.Curve,
-                result.CoverEnvelope,
+                pipeTopCurve,
+                envelope,
                 parameters,
                 minAcceptableBurialDepth,
                 nominalBridgeLiftProfile));
 
+        result.AxisOffset = Math.Max(0, parameters.PipeDiameter) / 2;
+        result.Vertices.AddRange(pipeTopVertices.Select(vertex => vertex with { Elevation = vertex.Elevation - result.AxisOffset }));
+        result.Curve.AddRange(KtbReader.BuildVerticalCurve(result.Vertices));
+        result.Guides.AddRange(KtbReader.BuildVerticalCurveGuides(result.Vertices));
+
         return result;
+    }
+
+    /// <summary>
+    /// Kurpların uyması gereken en küçük yarıçap: soğuk büküm tablosu ile boru boyu başına izin verilen
+    /// sapma açısından (R = boru boyu / açı) büyük olanı.
+    /// </summary>
+    public static double EffectiveMinimumRadius(DesignParameters parameters)
+    {
+        var radius = Math.Max(0, parameters.MinimumRadius);
+        if (parameters.MaxDeflectionDeg > 0 && parameters.PipeLength > 0)
+        {
+            radius = Math.Max(radius, parameters.PipeLength / (parameters.MaxDeflectionDeg * Math.PI / 180));
+        }
+
+        return radius;
+    }
+
+    private static (List<ProfilePoint> Points, HashSet<double> Locked) BuildAlignmentPoints(
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        IReadOnlyList<ProfilePoint> majorBreakpoints,
+        DesignParameters parameters,
+        double maximumCover,
+        double minimumRadius)
+    {
+        var locked = new HashSet<double>();
+        var points = new List<ProfilePoint>();
+        ProfilePoint? spanStart = null;
+
+        foreach (var plan in PlanCrossings(envelope, parameters, minimumRadius))
+        {
+            AppendDistinct(points, OptimizeSpan(envelope, majorBreakpoints, parameters, maximumCover, minimumRadius, spanStart, plan.LeftRampEnd ?? plan.LeftPi));
+            AppendDistinct(points, [plan.LeftPi, plan.RightPi]);
+            foreach (var point in new[] { plan.LeftRampEnd, plan.LeftPi, plan.RightPi, plan.RightRampEnd }.OfType<ProfilePoint>())
+            {
+                locked.Add(point.Station);
+            }
+
+            spanStart = plan.RightRampEnd ?? plan.RightPi;
+        }
+
+        AppendDistinct(points, OptimizeSpan(envelope, majorBreakpoints, parameters, maximumCover, minimumRadius, spanStart, null));
+        return (points, locked);
+    }
+
+    private static void AppendDistinct(List<ProfilePoint> target, IEnumerable<ProfilePoint> source)
+    {
+        foreach (var point in source)
+        {
+            if (target.Count > 0 && point.Station <= target[^1].Station + 0.05)
+            {
+                continue;
+            }
+
+            target.Add(point);
+        }
+    }
+
+    /// <summary>
+    /// Serbest aralık için mevcut sadeleştirme zinciri. Uçlar verilmişse (özel geçiş rampası) o kotlara sabitlenir.
+    /// </summary>
+    private static List<ProfilePoint> OptimizeSpan(
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        IReadOnlyList<ProfilePoint> majorBreakpoints,
+        DesignParameters parameters,
+        double maximumCover,
+        double minimumRadius,
+        ProfilePoint? start,
+        ProfilePoint? end)
+    {
+        var startStation = start?.Station ?? envelope[0].Station;
+        var endStation = end?.Station ?? envelope[^1].Station;
+        if (endStation - startStation < 0.5)
+        {
+            return new[] { start, end }.OfType<ProfilePoint>().ToList();
+        }
+
+        var span = BuildSpanEnvelope(envelope, startStation, endStation, start?.Elevation, end?.Elevation);
+        var breakpoints = majorBreakpoints
+            .Where(point => point.Station > startStation && point.Station < endStation)
+            .ToList();
+        var chordBurialSlack = ComputeChordBurialSlack(parameters.TargetCover, maximumCover);
+
+        var points = SelectPrimaryIntersections(
+            span,
+            breakpoints,
+            parameters.TargetCover,
+            maximumCover,
+            chordBurialSlack);
+        points = LiftToShallowestAllowed(points, span);
+        points = CollapseRedundantVertices(
+            points,
+            span,
+            parameters.MinimumSegmentLength,
+            parameters.TargetCover,
+            maximumCover,
+            parameters.CoverTolerance);
+        points = RefinePolylineAgainstNominalBurial(
+            points,
+            span,
+            parameters.TargetCover,
+            Math.Max(0.10, chordBurialSlack - 0.08),
+            parameters.MinimumSegmentLength);
+        points = RefinePolylineAgainstNominalBurial(
+            points,
+            span,
+            parameters.TargetCover,
+            0.08,
+            parameters.MinimumSegmentLength);
+        points = LiftToShallowestAllowed(points, span);
+        points = SnapPolylineUsingVerticalCurveBurial(
+            points,
+            span,
+            parameters,
+            minimumRadius,
+            burialSlackBeyondTarget: 0.10);
+        points = PruneDenseVertices(points, span, parameters, maximumCover);
+        points = RestoreCutCrests(points, span);
+
+        if (start is not null)
+        {
+            points[0] = start;
+        }
+
+        if (end is not null)
+        {
+            points[^1] = end;
+        }
+
+        return points;
+    }
+
+    private static List<CoverEnvelopePoint> BuildSpanEnvelope(
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        double startStation,
+        double endStation,
+        double? startElevation,
+        double? endElevation)
+    {
+        var span = new List<CoverEnvelopePoint> { PinEnvelope(EnvelopeAt(envelope, startStation) with { Station = startStation }, startElevation) };
+        span.AddRange(envelope.Where(point => point.Station > startStation + 1e-6 && point.Station < endStation - 1e-6));
+        span.Add(PinEnvelope(EnvelopeAt(envelope, endStation) with { Station = endStation }, endElevation));
+        return span;
+    }
+
+    private static CoverEnvelopePoint PinEnvelope(CoverEnvelopePoint point, double? elevation)
+    {
+        if (elevation is not double z)
+        {
+            return point;
+        }
+
+        return point with
+        {
+            NominalPipeTopElevation = z,
+            PreferredLowerElevation = Math.Min(point.PreferredLowerElevation, z),
+            PreferredUpperElevation = Math.Max(point.PreferredUpperElevation, z),
+            MinimumCoverUpperElevation = Math.Max(point.MinimumCoverUpperElevation, z + LiftClearance)
+        };
+    }
+
+    private sealed record CrossingPlan(
+        ProfilePoint? LeftRampEnd,
+        ProfilePoint LeftPi,
+        ProfilePoint RightPi,
+        ProfilePoint? RightRampEnd);
+
+    /// <summary>
+    /// Her özel geçiş için: geçiş ve iki yanındaki tampon boyunca düz boru, iki uçta koridora bağlanan
+    /// en az <see cref="DesignParameters.CrossingRampMinM"/> uzunluğunda rampa. Rampalar birbirine binecek kadar
+    /// yakın geçişler tek düz bölümde birleştirilir. Düz bölüm uçları ve rampa uçları kilitlidir.
+    /// </summary>
+    private static List<CrossingPlan> PlanCrossings(
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        DesignParameters parameters,
+        double minimumRadius)
+    {
+        var plans = new List<CrossingPlan>();
+        if (parameters.Crossings is not { Count: > 0 } crossings || envelope.Count < 2)
+        {
+            return plans;
+        }
+
+        var first = envelope[0].Station;
+        var last = envelope[^1].Station;
+        var buffer = Math.Max(0, parameters.CrossingBufferM);
+        var mergeGap = 2 * (CrossingRampSearchMax + parameters.PipeLength);
+
+        var zones = new List<(double Start, double End)>();
+        foreach (var crossing in crossings
+                     .Select(item => (Start: Math.Min(item.StartStation, item.EndStation) - buffer, End: Math.Max(item.StartStation, item.EndStation) + buffer))
+                     .Where(item => item.End > first && item.Start < last)
+                     .OrderBy(item => item.Start))
+        {
+            if (zones.Count > 0 && crossing.Start - zones[^1].End < mergeGap)
+            {
+                zones[^1] = (zones[^1].Start, Math.Max(zones[^1].End, crossing.End));
+                continue;
+            }
+
+            zones.Add(crossing);
+        }
+
+        var boundary = first;
+        foreach (var zone in zones)
+        {
+            var flatStart = Math.Max(zone.Start, first);
+            var flatEnd = Math.Min(zone.End, last);
+            var flatTop = FlatCrossingTop(envelope, flatStart, flatEnd);
+
+            var (leftPi, leftRamp) = flatStart <= first + 1e-6
+                ? (new ProfilePoint(first, flatTop), null)
+                : PlanRamp(envelope, flatTop, flatStart, -1, boundary, parameters, minimumRadius);
+            var (rightPi, rightRamp) = flatEnd >= last - 1e-6
+                ? (new ProfilePoint(last, flatTop), null)
+                : PlanRamp(envelope, flatTop, flatEnd, 1, last, parameters, minimumRadius);
+
+            plans.Add(new CrossingPlan(leftRamp, leftPi, rightPi, rightRamp));
+            boundary = (rightRamp ?? rightPi).Station;
+        }
+
+        return plans;
+    }
+
+    private static double FlatCrossingTop(IReadOnlyList<CoverEnvelopePoint> envelope, double start, double end)
+    {
+        var top = Math.Min(
+            EnvelopeAt(envelope, start).MinimumCoverUpperElevation,
+            EnvelopeAt(envelope, end).MinimumCoverUpperElevation);
+        for (var i = LowerBoundStation(envelope, start); i < envelope.Count && envelope[i].Station <= end; i++)
+        {
+            top = Math.Min(top, envelope[i].MinimumCoverUpperElevation);
+        }
+
+        return top - LiftClearance;
+    }
+
+    /// <summary>
+    /// Düz bölüm ucundaki kilitli someyi ve koridora bağlanan rampa ucunu bulur. Python V33.1 ile aynı arama:
+    /// rampa en az asgari boyda başlar, eğim izin verilen sapma açısına inince durur; inmezse en yatık nokta alınır.
+    /// Kilitli some, kurbu düz bölüme taşmayacak kadar dışarı (kurp teğeti kadar) konur.
+    /// </summary>
+    private static (ProfilePoint Pi, ProfilePoint? RampEnd) PlanRamp(
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        double flatTop,
+        double flatEdge,
+        int direction,
+        double boundary,
+        DesignParameters parameters,
+        double minimumRadius)
+    {
+        var rampMin = Math.Max(1.0, parameters.CrossingRampMinM);
+        var maxSlope = parameters.MaxDeflectionDeg > 0
+            ? Math.Tan(parameters.MaxDeflectionDeg * Math.PI / 180)
+            : double.PositiveInfinity;
+        var tangent = parameters.PipeLength / 2;
+        var pi = new ProfilePoint(flatEdge, flatTop);
+        ProfilePoint? rampEnd = null;
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            var piStation = flatEdge + direction * tangent;
+            if (direction < 0 ? piStation <= boundary + 1 : piStation >= boundary - 1)
+            {
+                return (new ProfilePoint(flatEdge, flatTop), null);
+            }
+
+            pi = new ProfilePoint(piStation, flatTop);
+            var dh = Math.Abs(flatTop - CorridorLevelNear(envelope, piStation, flatTop));
+            var theoretical = double.IsPositiveInfinity(maxSlope) ? rampMin : dh / maxSlope;
+            var searchMax = Math.Max(rampMin + 2, Math.Min(CrossingRampSearchMax, theoretical + 6));
+
+            ProfilePoint? best = null;
+            var bestSlope = double.PositiveInfinity;
+            for (var length = rampMin; length <= searchMax + 1e-9; length += CrossingRampStep)
+            {
+                var station = piStation + direction * length;
+                if (direction < 0 ? station <= boundary + 1 : station >= boundary - 1)
+                {
+                    break;
+                }
+
+                var level = CorridorLevelNear(envelope, station, flatTop);
+                var slope = Math.Abs(flatTop - level) / length;
+                if (slope < bestSlope)
+                {
+                    bestSlope = slope;
+                    best = new ProfilePoint(station, level);
+                }
+
+                if (slope <= maxSlope + 1e-9)
+                {
+                    break;
+                }
+            }
+
+            if (best is null)
+            {
+                return (pi, null);
+            }
+
+            rampEnd = best;
+            var nextTangent = Math.Max(parameters.PipeLength, minimumRadius * bestSlope) / 2;
+            if (Math.Abs(nextTangent - tangent) < 0.01)
+            {
+                break;
+            }
+
+            tangent = nextTangent;
+        }
+
+        return (pi, rampEnd);
+    }
+
+    private static double CorridorLevelNear(IReadOnlyList<CoverEnvelopePoint> envelope, double station, double elevation)
+    {
+        var point = EnvelopeAt(envelope, station);
+        var upper = point.MinimumCoverUpperElevation - LiftClearance;
+        var lower = Math.Min(point.PreferredLowerElevation, upper);
+        return Math.Clamp(elevation, lower, upper);
+    }
+
+    /// <summary>
+    /// Önce sapma açısından gelen yarıçap zorlanır; arazinin izin vermediği yerlerde (sıcak büküm adayı) en azından
+    /// soğuk büküm tablosundaki yarıçap korunur.
+    /// </summary>
+    private static List<ProfilePoint> EnforceRadiusLimits(
+        List<ProfilePoint> points,
+        HashSet<double> locked,
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        DesignParameters parameters,
+        double minimumRadius)
+    {
+        points = EnforceMinimumRadius(points, locked, envelope, minimumRadius);
+        var coldBendRadius = Math.Max(0, parameters.MinimumRadius);
+        return coldBendRadius > 0 && coldBendRadius < minimumRadius - 1e-6
+            ? EnforceMinimumRadius(points, locked, envelope, coldBendRadius)
+            : points;
+    }
+
+    /// <summary>
+    /// Her ara somede R·Δg / 2 teğetinin iki bacağa da sığmasını zorlar. Önce some silinir (komşular arası kiriş
+    /// minimum örtü ile en derin koridor arasında kalıyorsa); silinemezse someler yalnızca aşağı itilir: tepede
+    /// some, çukurda komşular. Kilitli (özel geçiş) somelerin kotu değişmez.
+    /// </summary>
+    private static List<ProfilePoint> EnforceMinimumRadius(
+        List<ProfilePoint> points,
+        HashSet<double> locked,
+        IReadOnlyList<CoverEnvelopePoint> envelope,
+        double minimumRadius)
+    {
+        if (minimumRadius <= 0 || points.Count < 3)
+        {
+            return points;
+        }
+
+        var work = points.ToList();
+
+        for (var pass = 0; pass < 80; pass++)
+        {
+            var changed = false;
+            for (var i = 1; i < work.Count - 1; i++)
+            {
+                var prev = work[i - 1];
+                var curr = work[i];
+                var next = work[i + 1];
+                var legIn = curr.Station - prev.Station;
+                var legOut = next.Station - curr.Station;
+                if (legIn <= 1e-6 || legOut <= 1e-6)
+                {
+                    continue;
+                }
+
+                var delta = (next.Elevation - curr.Elevation) / legOut - (curr.Elevation - prev.Elevation) / legIn;
+                var allowed = 2 * MaxTangentShare * Math.Min(legIn, legOut) / minimumRadius;
+                var excess = Math.Abs(delta) - allowed;
+                if (excess <= 1e-6)
+                {
+                    continue;
+                }
+
+                if (!locked.Contains(curr.Station) && IsLineInsideCorridor(prev, next, envelope))
+                {
+                    work.RemoveAt(i);
+                    i--;
+                    changed = true;
+                    continue;
+                }
+
+                if (delta < 0)
+                {
+                    if (!locked.Contains(curr.Station))
+                    {
+                        var drop = Math.Min(excess / (1 / legIn + 1 / legOut), curr.Elevation - FloorAt(envelope, curr.Station));
+                        if (drop > 1e-4)
+                        {
+                            work[i] = curr with { Elevation = curr.Elevation - drop };
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+                else
+                {
+                    var canPrev = !locked.Contains(prev.Station);
+                    var canNext = !locked.Contains(next.Station);
+                    var weight = (canPrev ? 1 / legIn : 0) + (canNext ? 1 / legOut : 0);
+                    if (weight > 0)
+                    {
+                        var drop = excess / weight;
+                        var moved = false;
+                        if (canPrev)
+                        {
+                            var d = Math.Min(drop, prev.Elevation - FloorAt(envelope, prev.Station));
+                            if (d > 1e-4)
+                            {
+                                work[i - 1] = prev with { Elevation = prev.Elevation - d };
+                                moved = true;
+                            }
+                        }
+
+                        if (canNext)
+                        {
+                            var d = Math.Min(drop, next.Elevation - FloorAt(envelope, next.Station));
+                            if (d > 1e-4)
+                            {
+                                work[i + 1] = next with { Elevation = next.Elevation - d };
+                                moved = true;
+                            }
+                        }
+
+                        if (moved)
+                        {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            if (!changed)
+            {
+                break;
+            }
+        }
+
+        return work;
+    }
+
+    private static double FloorAt(IReadOnlyList<CoverEnvelopePoint> envelope, double station)
+    {
+        return EnvelopeAt(envelope, station).PreferredLowerElevation;
     }
 
     /// <summary>
@@ -341,6 +762,7 @@ public static class VerticalDesignCalculator
         IReadOnlyList<ProfilePoint> points,
         IReadOnlyList<CoverEnvelopePoint> envelope,
         DesignParameters parameters,
+        double minimumRadius,
         double burialSlackBeyondTarget)
     {
         if (points.Count < 2 || envelope.Count == 0)
@@ -354,7 +776,7 @@ public static class VerticalDesignCalculator
 
         for (var iter = 0; iter < maxIterations; iter++)
         {
-            var vertices = BuildVertices(work, parameters).ToList();
+            var vertices = BuildVertices(work, parameters, minimumRadius).ToList();
             var curveSamples = KtbReader.BuildVerticalCurve(vertices);
             if (curveSamples.Count == 0)
             {
@@ -992,6 +1414,69 @@ public static class VerticalDesignCalculator
         return true;
     }
 
+    private const double CrestShortcutLimit = 0.45;
+
+    private static List<ProfilePoint> RestoreCutCrests(
+        List<ProfilePoint> points,
+        IReadOnlyList<CoverEnvelopePoint> envelope)
+    {
+        var result = points.ToList();
+        for (var pass = 0; pass < 8; pass++)
+        {
+            var inserted = false;
+            for (var i = 0; i < result.Count - 1; i++)
+            {
+                var start = result[i];
+                var end = result[i + 1];
+                var range = end.Station - start.Station;
+                if (range < 12)
+                {
+                    continue;
+                }
+
+                var worst = -1;
+                var worstDepth = CrestShortcutLimit;
+                var first = LowerBoundStation(envelope, start.Station);
+                var last = LowerBoundStation(envelope, end.Station);
+                for (var k = first; k < last; k++)
+                {
+                    var ep = envelope[k];
+                    if (ep.Station <= start.Station + 4 || ep.Station >= end.Station - 4)
+                    {
+                        continue;
+                    }
+
+                    var t = (ep.Station - start.Station) / range;
+                    var chord = start.Elevation + t * (end.Elevation - start.Elevation);
+                    var extra = ep.NominalPipeTopElevation - chord;
+                    if (extra > worstDepth)
+                    {
+                        worstDepth = extra;
+                        worst = k;
+                    }
+                }
+
+                if (worst < 0)
+                {
+                    continue;
+                }
+
+                var at = envelope[worst];
+                var elevation = Math.Clamp(at.NominalPipeTopElevation, at.PreferredLowerElevation, at.MinimumCoverUpperElevation);
+                result.Insert(i + 1, new ProfilePoint(at.Station, elevation));
+                inserted = true;
+                i++;
+            }
+
+            if (!inserted)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
     private static List<ProfilePoint> PruneDenseVertices(
         List<ProfilePoint> points,
         IReadOnlyList<CoverEnvelopePoint> envelope,
@@ -1022,7 +1507,9 @@ public static class VerticalDesignCalculator
                     continue;
                 }
 
-                if (!ChordFits(prev, next, envelope, allowedExtra))
+                var crest = curr.Elevation > prev.Elevation + 0.25 && curr.Elevation > next.Elevation + 0.25;
+                var budget = crest ? Math.Min(allowedExtra, 0.40) : allowedExtra;
+                if (!ChordFits(prev, next, envelope, budget))
                 {
                     continue;
                 }
@@ -1273,7 +1760,8 @@ public static class VerticalDesignCalculator
 
     private static IEnumerable<VerticalAlignmentVertex> BuildVertices(
         IReadOnlyList<ProfilePoint> points,
-        DesignParameters parameters)
+        DesignParameters parameters,
+        double minimumRadius)
     {
         if (points.Count == 0)
         {
@@ -1297,13 +1785,8 @@ public static class VerticalDesignCalculator
                 var slopeDelta = Math.Abs(outgoingSlope - incomingSlope);
 
                 curveLength = Math.Min(
-                    Math.Max(parameters.PipeLength, parameters.MinimumRadius * slopeDelta),
-                    Math.Min(incomingLength, outgoingLength) * 0.8);
-
-                if (curveLength < parameters.PipeLength && Math.Min(incomingLength, outgoingLength) >= parameters.PipeLength)
-                {
-                    curveLength = parameters.PipeLength;
-                }
+                    Math.Max(parameters.PipeLength, minimumRadius * slopeDelta),
+                    Math.Min(incomingLength, outgoingLength) * 2 * MaxTangentShare);
 
                 if (curveLength > 0 && slopeDelta > 0.000001)
                 {
@@ -1320,6 +1803,56 @@ public static class VerticalDesignCalculator
                 curveLength / 2,
                 radius);
         }
+    }
+
+    private static List<ProfilePoint> LowerOnlyShallowSpans(
+        List<ProfilePoint> points,
+        HashSet<double> locked,
+        IReadOnlyList<CoverIssue> issues,
+        double minimumBurialDepth,
+        IReadOnlyList<ProfilePoint>? nominalBridgeLiftProfile,
+        double maximumDrop)
+    {
+        var lowered = points.Select(point => new ProfilePoint(point.Station, point.Elevation)).ToList();
+        if (lowered.Count == 0 || issues.Count == 0)
+        {
+            return lowered;
+        }
+
+        var drop = new double[lowered.Count];
+        foreach (var issue in issues)
+        {
+            var deficit = EffectiveMinBurialForStation(issue.Station, minimumBurialDepth, nominalBridgeLiftProfile)
+                          - issue.Cover
+                          + LiftClearance;
+            deficit = Math.Min(Math.Max(0, deficit), Math.Max(0, maximumDrop));
+            if (deficit <= 0)
+            {
+                continue;
+            }
+
+            var index = 0;
+            while (index < lowered.Count - 1 && lowered[index + 1].Station < issue.Station)
+            {
+                index++;
+            }
+
+            drop[index] = Math.Max(drop[index], deficit);
+            if (index + 1 < lowered.Count)
+            {
+                drop[index + 1] = Math.Max(drop[index + 1], deficit);
+            }
+        }
+
+        for (var i = 0; i < lowered.Count; i++)
+        {
+            if (drop[i] > 0 && !locked.Contains(lowered[i].Station))
+            {
+                lowered[i] = new ProfilePoint(lowered[i].Station, lowered[i].Elevation - drop[i]);
+            }
+        }
+
+        return lowered;
     }
 
     private static double BaseMinBurial(DesignParameters parameters)

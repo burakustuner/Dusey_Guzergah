@@ -1,3 +1,5 @@
+import { readCrossingSheet } from './api'
+
 export type Crossing = {
   id: string
   name: string
@@ -31,46 +33,132 @@ export function downloadCrossingTemplate() {
   URL.revokeObjectURL(url)
 }
 
-export async function readCrossingFile(file: File): Promise<Crossing[]> {
-  const text = await file.text()
-  return parseCrossingTable(text)
+export type CrossingImport = { crossings: Crossing[]; note: string }
+
+/**
+ * CSV/TXT tarayıcıda, .xlsx sunucuda okunur. İki düzen tanınır: başlıklı tek satır şablonu
+ * (başlangıç km, bitiş km, derinlik) ve Python V33.1 düzeni (KM, cins, derinlik; her geçiş iki satır).
+ * `profileEndKm` verilirse Python düzenindeki düz sayıların metre mi km mi olduğu buna göre seçilir.
+ */
+export async function readCrossingFile(file: File, profileEndKm?: number): Promise<CrossingImport> {
+  const name = file.name.toLocaleLowerCase('tr')
+  if (name.endsWith('.xls')) {
+    throw new Error('Eski .xls biçimi okunamıyor. Excel’de «Farklı Kaydet → Excel Çalışma Kitabı (.xlsx)» ile kaydedin.')
+  }
+  const rows = name.endsWith('.xlsx') ? await readCrossingSheet(file) : splitTable(await file.text())
+  return parseCrossingRows(rows, profileEndKm)
 }
 
-export function parseCrossingTable(text: string): Crossing[] {
+export function parseCrossingTable(text: string, profileEndKm?: number): CrossingImport {
+  return parseCrossingRows(splitTable(text), profileEndKm)
+}
+
+function splitTable(text: string): string[][] {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   if (lines.length === 0) {
     return []
   }
-  const delimiter = lines[0].includes(';') ? ';' : ','
-  const header = lines[0].split(delimiter).map(normalizeHeader)
-  const nameAt = columnIndex(header, ['ozel gecis adi', 'ad', 'adi', 'name'])
-  const typeAt = columnIndex(header, ['tip', 'type'])
-  const startAt = columnIndex(header, ['baslangic km', 'baslangic', 'start'])
-  const endAt = columnIndex(header, ['bitis km', 'bitis', 'end'])
-  const depthAt = columnIndex(header, ['derinlik (m)', 'derinlik', 'depth'])
-  if (startAt < 0 || endAt < 0 || depthAt < 0) {
-    throw new Error('Şablonda başlangıç km, bitiş km ve derinlik (m) sütunları olmalı.')
+  const delimiter = lines[0].includes(';') ? ';' : lines[0].includes('\t') ? '\t' : ','
+  return lines.map((line) => line.split(delimiter))
+}
+
+export function parseCrossingRows(rows: string[][], profileEndKm?: number): CrossingImport {
+  const cleaned = rows
+    .map((row) => row.map((cell) => (cell ?? '').trim()))
+    .filter((row) => row.some((cell) => cell.length > 0))
+  if (cleaned.length === 0) {
+    return { crossings: [], note: 'Liste boş.' }
   }
-  const rows: Crossing[] = []
-  for (const line of lines.slice(1)) {
-    const cells = line.split(delimiter).map((cell) => cell.trim())
-    const startKm = parseKm(cells[startAt] ?? '')
-    const endKm = parseKm(cells[endAt] ?? '')
-    const depth = parseNumber(cells[depthAt] ?? '')
+
+  const header = cleaned[0].map(normalizeHeader)
+  const columns = {
+    nameAt: columnIndex(header, ['ozel gecis adi', 'ad', 'adi', 'name']),
+    typeAt: columnIndex(header, ['tip', 'type']),
+    startAt: columnIndex(header, ['baslangic km', 'baslangic', 'start']),
+    endAt: columnIndex(header, ['bitis km', 'bitis', 'end']),
+    depthAt: columnIndex(header, ['derinlik (m)', 'derinlik', 'depth']),
+  }
+  if (columns.startAt >= 0 && columns.endAt >= 0 && columns.depthAt >= 0) {
+    const crossings = parseTemplateRows(cleaned.slice(1), columns)
+    return { crossings, note: `${crossings.length} özel geçiş okundu (şablon düzeni).` }
+  }
+
+  const paired = parsePairedRows(cleaned, profileEndKm)
+  if (paired.crossings.length > 0) {
+    return paired
+  }
+  throw new Error('Liste tanınmadı. Başlıklı şablonu (başlangıç km, bitiş km, derinlik) ya da Python düzenini (KM, cins, derinlik; her geçiş iki satır) kullanın.')
+}
+
+function parseTemplateRows(
+  rows: string[][],
+  columns: { nameAt: number; typeAt: number; startAt: number; endAt: number; depthAt: number },
+): Crossing[] {
+  const result: Crossing[] = []
+  for (const cells of rows) {
+    const startKm = parseKm(cells[columns.startAt] ?? '')
+    const endKm = parseKm(cells[columns.endAt] ?? '')
+    const depth = parseNumber(cells[columns.depthAt] ?? '')
     if (startKm === null || endKm === null || depth === null) {
       continue
     }
     crossingSeq += 1
-    rows.push({
+    result.push({
       id: `gecis-${crossingSeq}`,
-      name: nameAt >= 0 ? cells[nameAt] ?? '' : '',
-      type: typeAt >= 0 ? cells[typeAt] ?? '' : '',
+      name: columns.nameAt >= 0 ? cells[columns.nameAt] ?? '' : '',
+      type: columns.typeAt >= 0 ? cells[columns.typeAt] ?? '' : '',
       startKm,
       endKm,
       depth,
     })
   }
-  return rows
+  return result
+}
+
+/**
+ * Python V33.1 listesi: 1. sütun KM, 2. sütun cins, 3. sütun derinlik; ardışık iki geçerli satır bir geçiştir.
+ * Python bu KM değerini profil X koordinatı (metre) olarak kullanır; "1+250" yazımı her zaman km sayılır.
+ */
+function parsePairedRows(rows: string[][], profileEndKm?: number): CrossingImport {
+  const points: { value: number; plus: boolean; kind: string; depth: number }[] = []
+  for (const cells of rows) {
+    const raw = cells[0] ?? ''
+    const value = parseKm(raw)
+    const depth = parseNumber(cells[2] ?? '')
+    if (value === null || depth === null) {
+      continue
+    }
+    points.push({ value, plus: raw.includes('+'), kind: cells[1] ?? '', depth })
+  }
+
+  const plainValues = points.filter((point) => !point.plus).map((point) => point.value)
+  const plainAreMeters = plainValues.length > 0
+    && (profileEndKm === undefined || Math.max(...plainValues) > profileEndKm + 0.1)
+  const toKm = (point: (typeof points)[number]) => (!point.plus && plainAreMeters ? point.value / 1000 : point.value)
+
+  const crossings: Crossing[] = []
+  for (let i = 0; i + 1 < points.length; i += 2) {
+    const first = points[i]
+    const second = points[i + 1]
+    const a = toKm(first)
+    const b = toKm(second)
+    crossingSeq += 1
+    crossings.push({
+      id: `gecis-${crossingSeq}`,
+      name: first.kind,
+      type: first.kind,
+      startKm: Math.min(a, b),
+      endKm: Math.max(a, b),
+      depth: Math.max(first.depth, second.depth),
+    })
+  }
+
+  const unit = plainAreMeters ? 'KM sütunu metre kabul edildi' : 'KM sütunu kilometre kabul edildi'
+  const leftover = points.length % 2 === 1 ? ' Son satırın eşi olmadığı için atlandı.' : ''
+  return {
+    crossings,
+    note: `${crossings.length} özel geçiş okundu (Python düzeni, ${unit}).${leftover}`,
+  }
 }
 
 function normalizeHeader(value: string) {

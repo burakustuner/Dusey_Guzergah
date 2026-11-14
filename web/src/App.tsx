@@ -11,7 +11,7 @@ import {
 import EditorPanel from './EditorPanel'
 import ProfileCanvas, { type ProfileCanvasHandle } from './ProfileCanvas'
 import { downloadCrossingTemplate, emptyCrossing, readCrossingFile, type Crossing } from './crossings'
-import { applyBotas, bendFieldsForDiameter, diameterChoices, diameterMeters, elasticRadiusM, hotBendRadiusM } from './standards'
+import { applyBotas, bendFieldsForDiameter, diameterChoices, diameterMeters, effectiveMinimumRadiusM, elasticRadiusM, hotBendRadiusM } from './standards'
 import { buildVerticalCurve, buildVerticalCurveGuides } from './verticalCurve'
 import {
   defaultForm,
@@ -56,6 +56,7 @@ export default function App() {
   const [session, setSession] = useState<SessionResponse | null>(null)
   const [design, setDesign] = useState<DesignResult | null>(null)
   const [form, setForm] = useState<DesignForm>(defaultForm)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [crossings, setCrossings] = useState<Crossing[]>([])
   const [layers, setLayers] = useState<Layers>(defaultLayers)
   const [tool, setTool] = useState<CanvasTool>('select')
@@ -70,6 +71,8 @@ export default function App() {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [thresholds, setThresholds] = useState<WarningThresholds>(defaultThresholds)
   const [warnings, setWarnings] = useState<string[]>([])
+  const axisDepth = form.targetCover + diameterMeters(form.diameterInches) / 2
+  const minimumCurveRadius = effectiveMinimumRadiusM(form.minimumRadius, form.pipeLength, form.maxDeflectionDeg)
 
   function syncHistory() {
     setHistoryFlags({ undo: historyRef.current.canUndo, redo: historyRef.current.canRedo })
@@ -272,9 +275,9 @@ export default function App() {
     }
     const first = terrain[0]
     const last = terrain[terrain.length - 1]
-    const created = [createEditorRow(first.station, suggestElevation(terrain, first.station, form.strippingDepth, form.targetCover), pipeLength)]
+    const created = [createEditorRow(first.station, suggestElevation(terrain, first.station, form.strippingDepth, axisDepth), pipeLength)]
     if (Math.abs(last.station - first.station) > 0.001) {
-      created.push(createEditorRow(last.station, suggestElevation(terrain, last.station, form.strippingDepth, form.targetCover), pipeLength))
+      created.push(createEditorRow(last.station, suggestElevation(terrain, last.station, form.strippingDepth, axisDepth), pipeLength))
     }
     setEditorRows(created, 'clear')
     setStatus('Düzenleyici: yeni liste (uç KM + yaklaşık kot).')
@@ -294,7 +297,7 @@ export default function App() {
       station = ordered[ordered.length - 1].station + form.pipeLength
     }
     const elevation = terrain.length >= 2
-      ? suggestElevation(terrain, station, form.strippingDepth, form.targetCover)
+      ? suggestElevation(terrain, station, form.strippingDepth, axisDepth)
       : 0
     const next = sortRows([...ordered, createEditorRow(station, elevation, form.pipeLength)])
     setEditorRows(next, 'commit')
@@ -316,7 +319,7 @@ export default function App() {
       setStatus('Profilden some eklemek için önce KSE yükleyin.')
       return
     }
-    const elevation = suggestElevation(terrain, station, form.strippingDepth, form.targetCover)
+    const elevation = suggestElevation(terrain, station, form.strippingDepth, axisDepth)
     const row = createEditorRow(station, elevation, form.pipeLength)
     setEditorRows(sortRows([...rowsRef.current, row]), 'commit')
     setSelectedId(row.id)
@@ -429,7 +432,7 @@ export default function App() {
           session={session}
           design={design}
           layers={layers}
-          pipeOffset={form.strippingDepth + form.targetCover}
+          pipeOffset={form.strippingDepth + axisDepth}
           tool={tool}
           alignmentVertices={alignment.vertices}
           alignmentCurve={alignment.curve}
@@ -456,7 +459,10 @@ export default function App() {
           onContextMenuAt={(x, y, station, elevation) => setMenu({ x, y, station, elevation })}
         />
         <aside className="side">
-          <h2>Hesap</h2>
+          <div className="side-head">
+            <h2>Hesap</h2>
+            <button type="button" className="help-btn" aria-label="Alan açıklamaları" onClick={() => setHelpOpen(true)}>?</button>
+          </div>
           <label className="field">
             Standart
             <select
@@ -493,12 +499,14 @@ export default function App() {
           <NumberField label="Düz uç (m)" value={form.straightEndM} step="0.1" onChange={(value) => setForm((current) => ({ ...current, straightEndM: value }))} />
           <NumberField label="Min. ara (m)" value={form.minimumSegmentLength} step="0.1" onChange={(value) => setForm((current) => ({ ...current, minimumSegmentLength: value }))} />
           <NumberField label="Soğuk büküm min. R (m)" value={form.minimumRadius} step="0.1" onChange={(value) => setForm((current) => ({ ...current, minimumRadius: value }))} />
+          <NumberField label="Maks. sapma açısı (°/boru)" value={form.maxDeflectionDeg} step="0.1" onChange={(value) => setForm((current) => ({ ...current, maxDeflectionDeg: value }))} />
           <NumberField label="Elastik eşik (×D)" value={form.elasticRadiusFactor} step="1" onChange={(value) => setForm((current) => ({ ...current, elasticRadiusFactor: value }))} />
           <NumberField label="Sıcak büküm R (×D)" value={form.hotBendRadiusFactor} step="0.1" onChange={(value) => setForm((current) => ({ ...current, hotBendRadiusFactor: value }))} />
           <NumberField label="Sıcak büküm açı (°)" value={form.hotBendMaxAngleDeg} step="1" onChange={(value) => setForm((current) => ({ ...current, hotBendMaxAngleDeg: value }))} />
           <NumberField label="Sıcak büküm teğet (m)" value={form.hotBendTangentM} step="0.1" onChange={(value) => setForm((current) => ({ ...current, hotBendTangentM: value }))} />
           <p className="hint">
-            Çap {diameterMeters(form.diameterInches).toFixed(3)} m.
+            Çap {diameterMeters(form.diameterInches).toFixed(3)} m; KTB’ye eksen kotu yazılır (boru üstü − {(diameterMeters(form.diameterInches) / 2).toFixed(3)} m).
+            En küçük kurp yarıçapı {minimumCurveRadius.toFixed(1)} m.
             Elastik eşik {elasticRadiusM(form.diameterInches, form.elasticRadiusFactor).toFixed(1)} m,
             soğuk büküm tablosu {form.coldBendMinRadius.toFixed(1)} m,
             sıcak büküm {hotBendRadiusM(form.diameterInches, form.hotBendRadiusFactor).toFixed(2)} m.
@@ -508,14 +516,16 @@ export default function App() {
             Standart değerleri doldur
           </button>
           <h2>Özel geçiş</h2>
-          <p className="hint">Liste boşsa arazi örtüsü değişmez. Kilometre ondalıktır (1.250 = 1+250). Şablondaki satırlar örnektir.</p>
+          <p className="hint">Liste boşsa arazi örtüsü değişmez. Excel (.xlsx) veya CSV yüklenebilir; Python’daki iki satırlı liste de tanınır. Kilometre ondalıktır (1.250 = 1+250).</p>
+          <NumberField label="Geçiş tamponu (m)" value={form.crossingBufferM} step="0.5" onChange={(value) => setForm((current) => ({ ...current, crossingBufferM: value }))} />
+          <NumberField label="Min. rampa (m)" value={form.crossingRampMinM} step="0.5" onChange={(value) => setForm((current) => ({ ...current, crossingRampMinM: value }))} />
           <div className="crossing-actions">
             <button type="button" onClick={downloadCrossingTemplate}>Şablonu indir</button>
             <label className="file">
               Liste yükle
               <input
                 type="file"
-                accept=".csv,.txt"
+                accept=".xlsx,.xls,.csv,.txt"
                 onChange={async (event) => {
                   const file = event.target.files?.[0]
                   event.target.value = ''
@@ -523,9 +533,11 @@ export default function App() {
                     return
                   }
                   try {
-                    const rows = await readCrossingFile(file)
-                    setCrossings(rows)
-                    setStatus(rows.length === 0 ? 'Özel geçiş listesi boş.' : `${rows.length} özel geçiş okundu.`)
+                    const terrain = session?.terrain ?? []
+                    const profileEndKm = terrain.length > 0 ? terrain[terrain.length - 1].station / 1000 : undefined
+                    const imported = await readCrossingFile(file, profileEndKm)
+                    setCrossings(imported.crossings)
+                    setStatus(imported.note)
                     setError('')
                   } catch (err) {
                     setError(err instanceof Error ? err.message : 'Özel geçiş listesi okunamadı.')
@@ -622,10 +634,65 @@ export default function App() {
           <button type="button" onClick={() => { void applyToProfile(); setMenu(null) }}>Çizime uygula</button>
         </div>
       )}
+      {helpOpen && <ParameterHelp onClose={() => setHelpOpen(false)} />}
       <footer className="status">
         <span>{status}</span>
         {error && <span className="error">{error}</span>}
       </footer>
+    </div>
+  )
+}
+
+const helpItems: { title: string; text: string }[] = [
+  { title: 'Standart', text: 'BOTAŞ seçilince alttaki alanlar bu standardın varsayılanına döner. Değerleri elle değiştirebilirsiniz.' },
+  { title: 'Boru çapı', text: 'İnç cinsinden anma çapı. Soğuk büküm yarıçapı, elastik eşik ve sıcak büküm yarıçapı bu çaptan hesaplanır. 12 inç yaklaşık 0,305 m’dir. Örtüler boru üstüne göre hesaplanır; KTB’ye ve tabloya ise eksen kotu (boru üstü − çapın yarısı) yazılır.' },
+  { title: 'Hedef örtü', text: 'Boru üstünün, sıyrılmış arazinin altında durması istenen derinlik. Hesabın takip etmeye çalıştığı çizgi budur. Varsayılan 1,20 m.' },
+  { title: 'Minimum örtü', text: 'Sert sınır. Boru üstü sıyrılmış yüzeye bundan daha fazla yaklaşamaz. Varsayılan 1,00 m. Özel geçiş listesindeki derinlik, kendi kilometresinde bunun yerine geçer.' },
+  { title: 'Ek derinlik', text: 'En derin koridor, hedef örtüye bu kadar eklenir. Varsayılan 3 m ile tavan 4,20 m olur. Boru bundan daha derine inmez.' },
+  { title: 'Birleştirmede ek gömü', text: 'Bir some silinirken düz kiriş hedeften en fazla bu kadar derine inebilir. Varsayılan 0,40 m. Düz aliyman hedef örtüye yakın kalır. Pay büyürse some azalır, boru tepenin altından daha derine iner. Tepede 0,45 m’den derin kesilirse tepeye some geri konur.' },
+  { title: 'Sıyırma', text: 'Örtü, ham araziden bu kadar toprak alındıktan sonra ölçülür. Varsayılan 0,15 m. Doğal yüzeye göre boru kabaca sıyırma ile örtünün toplamı kadar aşağıdadır.' },
+  { title: 'Boru boyu', text: 'Tek boru boyu. Aynı zamanda bir somedeki en kısa düşey kurp boyu. Varsayılan 12 m. Ekrandaki yay parçası bu uzunluktan gelir.' },
+  { title: 'Düz uç', text: 'Soğuk bükümün iki yanında kaynak için bırakılan düz parça. Varsayılan 1,8 m. Forma yazılıdır; kurp boyunu henüz kısaltmaz.' },
+  { title: 'Min. ara', text: 'İki some arasındaki tercih edilen en kısa mesafe. Varsayılan 24 m. Daha sık someler, kiriş örtü bandında kalıyorsa önce silinir.' },
+  { title: 'Soğuk büküm min. R', text: 'Çapa göre soğuk büküm tablosundaki en küçük yarıçap. 12 inçte 60×D, yaklaşık 18,3 m. Arazi sapma açısından gelen yarıçapa izin vermezse hesap en azından bu yarıçapı korur. Altına inen kurp sıcak büküm adayı sayılır.' },
+  { title: 'Maks. sapma açısı', text: 'Bir boru boyunda izin verilen en büyük yön değişimi. Yarıçapa çevrilir: R = boru boyu / açı. 12 m ve 7,2° ile yaklaşık 95,5 m. Her somede kurp bu yarıçaptan küçük olamaz; hesap someyi siler ya da derine iterek sağlar. Sağlanamayan yer uyarılarda listelenir. 0 yazılırsa yalnızca soğuk büküm yarıçapı geçerlidir.' },
+  { title: 'Elastik eşik', text: 'Bu katın üstündeki yarıçap makinesiz döşeme sınıfıdır. Varsayılan 500×D; 12 inçte yaklaşık 152 m. Hattı bu yarıçapa zorlamaz.' },
+  { title: 'Sıcak büküm R', text: 'İndüksiyon bükümünün varsayılan yarıçapı, 5×D. 12 inçte yaklaşık 1,52 m. Sipariş bilgisi; geometriye henüz bağlanmadı.' },
+  { title: 'Sıcak büküm açı', text: 'Tek bir sıcak büküm için varsayılan açı, 45°. Kurp açısını henüz kesmez.' },
+  { title: 'Sıcak büküm teğet', text: 'İmalat çizimindeki düz teğet payı. Varsayılan 1 m, kaynak ve kontrol için. Kurp boyuna henüz eklenmez.' },
+  { title: 'Özel geçiş', text: 'Liste boşsa arazi örtüsü değişmez. Doluysa boru, geçiş ve iki yanındaki tampon boyunca düz geçer; kotu bu aralıktaki en sığ izinli kottur (listedeki derinlik ve minimum örtü). Düz bölümün iki ucu kilitlidir. Kilometre ondalıktır: 1.250 ile 1+250 aynı noktadır. Şablondaki satırlar örnektir. Liste Excel (.xlsx, ilk sayfa) veya CSV olabilir. Python V33.1 listesi de okunur: 1. sütun KM, 2. sütun cins, 3. sütun derinlik, her geçiş iki satır. O listedeki düz sayılar profil metresiyse (1250 gibi) km’ye çevrilir; hangisi seçildiyse durum satırında yazar. Eski .xls dosyasını Excel’de .xlsx olarak kaydedin.' },
+  { title: 'Geçiş tamponu', text: 'Geçişin iki yanında boru düz kalır; kurplar bu mesafenin dışında biter. Varsayılan 6 m.' },
+  { title: 'Min. rampa', text: 'Düz bölümden koridora bağlanan rampanın en kısa boyu. Rampa bu boydan başlar ve eğimi sapma açısının altına inene kadar (en çok 30 m) uzatılır. Varsayılan 12,5 m. Birbirine bu kadar yakın geçişler tek düz bölümde birleşir.' },
+  { title: 'Uyarı eşikleri', text: 'Hesabın şeklini değiştirmez. Ara kurp 5 m’den kısaysa, sıyrılmış zemine 0,45 m’den yakınsa veya giriş eğimi %25’i aşarsa uyarı yazılır.' },
+]
+
+function ParameterHelp({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="help-backdrop" onClick={onClose}>
+      <div className="help-panel" role="dialog" aria-labelledby="help-title" onClick={(event) => event.stopPropagation()}>
+        <div className="help-head">
+          <h2 id="help-title">Hesap alanları</h2>
+          <button type="button" onClick={onClose}>Kapat</button>
+        </div>
+        <dl>
+          {helpItems.map((item) => (
+            <div key={item.title}>
+              <dt>{item.title}</dt>
+              <dd>{item.text}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
     </div>
   )
 }
