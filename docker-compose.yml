@@ -1,0 +1,15 @@
+services:
+  dusey-guzergah:
+    build: .
+    image: dusey-guzergah:latest
+    container_name: dusey-guzergah
+    ports:
+      - "8080:8080"
+    environment:
+      Sessions__TtlMinutes: "120"
+    volumes:
+      - dusey-sessions:/data
+    restart: unless-stopped
+
+volumes:
+  dusey-sessions:

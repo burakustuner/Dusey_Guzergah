@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/node_modules/
+web/dist/
+.git/
+.vs/
+.vscode/
+.docs/
+tests/
+*.user
+tmp_*.py

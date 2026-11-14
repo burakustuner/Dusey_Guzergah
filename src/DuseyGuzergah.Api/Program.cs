@@ -34,7 +34,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
     app.UseCors("Vite");
 }
-else
+else if (app.Configuration.GetValue("HttpsRedirection", true))
 {
     app.UseHttpsRedirection();
 }
@@ -42,7 +42,9 @@ else
 app.UseAuthorization();
 app.MapControllers();
 
-var spaDist = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "web", "dist"));
+var spaDist = app.Configuration["SpaPath"] is { Length: > 0 } configuredSpa
+    ? Path.GetFullPath(configuredSpa)
+    : Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "web", "dist"));
 if (Directory.Exists(spaDist))
 {
     var spaFiles = new PhysicalFileProvider(spaDist);
